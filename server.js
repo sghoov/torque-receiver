@@ -1,124 +1,56 @@
-// 1. Clean up any old instances if StreamElements reloads the widget in editor
-if (window.telemetrySocket) {
-    window.telemetrySocket.disconnect();
-}
+const express = require('express');
+const app = express();
+const http = require('http').createServer(app);
+const io = require('socket.io')(http, {
+  cors: { 
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
 
-// 2. Load Socket.io dynamically with a robust fallback protocol
-const scriptId = 'socket-io-script';
-let ioScript = document.getElementById(scriptId);
+const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
-if (!ioScript) {
-    ioScript = document.createElement('script');
-    ioScript.id = scriptId;
-    ioScript.src = "https://cdn.socket.io/4.7.5/socket.io.min.js";
-    document.head.appendChild(ioScript);
-}
+// Base endpoint for web browser verification
+app.get('/', (req, res) => {
+    res.send('Telemetry server is up and running!');
+});
 
-// Function to handle incoming server data and update your exact layout elements
-function handleTelemetryUpdate(data) {
-    try {
-        // Update the 5 main digital metrics
-        const tripEl = document.getElementById('val-trip');
-        const timeEl = document.getElementById('val-time');
-        const speedEl = document.getElementById('val-speed');
-        const elevEl = document.getElementById('val-elevation');
-        const effEl = document.getElementById('val-eff');
+// This is the endpoint Torque Pro pings every second
+app.get('/live', (req, res) => {
+    // 1. Pull the data out of the incoming URL query parameters
+    let rawSpeedKmh = parseFloat(req.query.kff120c) || 0;    
+    let rawAltitudeMeters = parseFloat(req.query.kff1238) || 0; 
+    let tripDistance = parseFloat(req.query.kff1204) || 0;   
 
-        if (tripEl) tripEl.innerText = data.distance || '-- mi';
-        if (timeEl) timeEl.innerText = data.time || '--';
-        if (speedEl) speedEl.innerText = data.speed || '-- mph';
-        if (elevEl) elevEl.innerText = data.elevation || '-- ft';
-        if (effEl) effEl.innerText = data.efficiency || '--';
+    // 2. Perform the calculations
+    let speedMph = rawSpeedKmh * 0.621371;
+    let taxSaved = tripDistance * MILEAGE_RATE;
+    let virtualRange = Math.max(0, 75 - tripDistance);
 
-        // Manage Range Text & Low Battery State Alerts
-        const rangeNumEl = document.querySelector('.range-num');
-        if (rangeNumEl) {
-            const numericRange = parseInt(data.range) || 0;
-            rangeNumEl.innerText = numericRange;
-            
-            if (numericRange < 15) {
-                rangeNumEl.classList.add('low-battery');
-            } else {
-                rangeNumEl.classList.remove('low-battery');
-            }
-        }
+    // Dynamic efficiency curve matching your driving behavior
+    let dynamicEfficiency = 4.2; 
+    if (speedMph > 65) dynamicEfficiency = 3.4; 
+    if (speedMph === 0) dynamicEfficiency = 0.0;
 
-        // Calculate and animate your car's progress bar (0 miles driven = 0% progress fill)
-        const rangePercent = parseInt(data.rangePercent) ?? 100;
-        const batteryUsed = Math.max(0, Math.min(100, 100 - rangePercent));
-        
-        const fill = document.querySelector('.road-fill-red');
-        const car = document.getElementById('car-icon');
+    // 3. Package the numbers for the StreamElements listener
+    const telemetryData = {
+        distance: tripDistance.toFixed(1) + " mi",
+        speed: Math.round(speedMph) + " mph",
+        elevation: Math.round(rawAltitudeMeters * 3.28084) + " ft", 
+        efficiency: dynamicEfficiency.toFixed(1) + " mi/kWh", 
+        range: Math.round(virtualRange) + " mi",
+        rangePercent: Math.round((virtualRange / 75) * 100),
+        tax: "$" + taxSaved.toFixed(2)
+    };
 
-        if (fill) fill.style.width = batteryUsed + "%";
-        if (car) car.style.left = batteryUsed + "%";
+    // 4. Fire the WebSocket pulse to the widget
+    io.emit('telemetry_update', telemetryData);
 
-    } catch (err) {
-        console.error("Error parsing layout telemetry: ", err);
-    }
-}
+    // 5. Reply OK to Torque Pro
+    res.send('OK!');
+});
 
-// Initialize the WebSocket handshake once the library is verified
-function initSocketConnection() {
-    try {
-        // Establishes connection to Render with automatic reconnection parameters
-        const socket = io("https://torque-receiver.onrender.com", {
-            transports: ['websocket', 'polling'],
-            reconnection: true,
-            reconnectionAttempts: Infinity,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 5000,
-            timeout: 20000
-        });
-
-        // Store globally to prevent duplicates on widget refreshes
-        window.telemetrySocket = socket;
-
-        socket.on('connect', () => {
-            console.log('Successfully connected to Render Telemetry Server!');
-        });
-
-        // Listens directly for your server.js broadcast loop
-        socket.on('telemetry_update', (data) => {
-            handleTelemetryUpdate(data);
-        });
-
-        socket.on('connect_error', (error) => {
-            console.warn('Telemetry connection error, retrying...', error);
-        });
-
-    } catch (e) {
-        console.error("Socket initialization aborted: ", e);
-    }
-}
-
-// ---------------------------------------------------------
-// CLOCK LOGIC (Preserved exactly from your original setup)
-// ---------------------------------------------------------
-function updateClock() {
-    const now = new Date();
-    let h = now.getHours();
-    const m = now.getMinutes().toString().padStart(2, '0');
-    const ampm = h >= 12 ? 'PM' : 'AM';
-    h = h % 12 || 12;
-    const clockEl = document.getElementById('clock-display');
-    if (clockEl) clockEl.innerHTML = `${h}:${m} <span class="am-pm">${ampm}</span>`;
-}
-
-// ---------------------------------------------------------
-// STREAMELEMENTS KICKOFF
-// ---------------------------------------------------------
-window.addEventListener('onWidgetLoad', function (obj) {
-    // Start clock loop immediately
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    // Wait briefly for the script element to safely mount, then wire the socket channel
-    if (typeof io !== 'undefined') {
-        initSocketConnection();
-    } else {
-        ioScript.onload = function() {
-            initSocketConnection();
-        };
-    }
+const PORT = process.env.PORT || 3000;
+http.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
 });
