@@ -15,27 +15,32 @@ app.get('/', (req, res) => {
 });
 
 app.get('/live', (req, res) => {
-    // 1. Extract parameters 
-    let rawSpeedMs = parseFloat(req.query.kff120c) || 0;       // Torque GPS speed arrives in meters/second
+    // 1. Pull the raw parameters from Torque Pro
+    let obdSpeedKmh = parseFloat(req.query.k0d) || parseFloat(req.query.kff120c) || 0; // Prioritizes stable OBD Wheel Speed, falls back to GPS
     let rawAltitudeMeters = parseFloat(req.query.kff1238) || 0; 
-    let tripDistance = parseFloat(req.query.kff1204) || 0;   
+    let rawDistanceMeters = parseFloat(req.query.kff1204) || 0;   
 
-    // 2. Perform conversions & calculations
-    let speedMph = rawSpeedMs * 2.23694; // Perfect conversion from m/s to MPH
+    // 2. Exact Metric-to-Imperial Math Corrections
+    let speedMph = obdSpeedKmh * 0.621371; // Converts stable KM/H directly to perfect MPH
+    
+    // Convert raw distance structure cleanly (checks if Torque is sending raw meters vs scaled imperial miles)
+    let tripDistance = rawDistanceMeters > 100 ? (rawDistanceMeters * 0.000621371) : rawDistanceMeters;
+    
     let taxSaved = tripDistance * MILEAGE_RATE;
 
-    // Dynamic efficiency handling
+    // Dynamic efficiency engine based on real-time speed transitions
     let dynamicEfficiency = 4.2; 
     if (speedMph > 65) dynamicEfficiency = 3.4; 
     if (speedMph === 0) dynamicEfficiency = 0.0;
 
-    // 3. Package calculations (We pass numeric metrics so StreamElements can optionally scale them)
+    // 3. Package completely clean, pre-scaled numbers for the stream overlay
     const telemetryData = {
         distance: tripDistance.toFixed(1) + " mi",
         speed: Math.round(speedMph) + " mph",
         elevation: Math.round(rawAltitudeMeters * 3.28084) + " ft", 
         efficiency: dynamicEfficiency.toFixed(1) + " mi/kWh", 
         tripMilesRaw: tripDistance,
+        rawSpeed: speedMph,
         tax: "$" + taxSaved.toFixed(2)
     };
 
