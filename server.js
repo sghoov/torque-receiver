@@ -15,11 +15,13 @@ app.get('/', (req, res) => {
 });
 
 app.get('/live', (req, res) => {
-    // 1. Pull true car wheel speed and distance registers from Torque
+    // 1. Pull true car wheel speed and distance registers from Torque Pro
     let rawSpeedKmh = parseFloat(req.query.k5) || parseFloat(req.query.k0d) || parseFloat(req.query.kff1001) || 0;
-    let rawAltitudeMeters = parseFloat(req.query.kff1238) || 0; 
     let rawDistanceKm = parseFloat(req.query.kff1204) || 0;   
     let rawAmbientCelsius = req.query.k46 ? parseFloat(req.query.k46) : null; 
+
+    // MULTI-PID ELEVATION SAFETY NET: Looks for GPS altitude, alternative altitude, or barometer height
+    let rawAltitudeMeters = parseFloat(req.query.kff1238) || parseFloat(req.query.kff122b) || parseFloat(req.query.kff1206) || 0; 
 
     // 2. Conversion Math
     let speedMph = rawSpeedKmh * 0.621371; 
@@ -30,21 +32,18 @@ app.get('/live', (req, res) => {
     
     let taxSaved = tripDistance * MILEAGE_RATE;
 
-    // Convert Ambient Temp to Fahrenheit with the +1 dashboard offset
+    // Convert Ambient Temp to Fahrenheit with the +1 dashboard offset calibration
     let tempFahrenheit = "--°F";
     if (rawAmbientCelsius !== null) {
         tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
     }
 
     // 3. EFFICIENCY ENGINE (Locked to your 4.2 City Baseline)
-    let dynamicEfficiency = "4.2 mi/kWh";                     // City sweet spot
-    if (speedMph > 45) dynamicEfficiency = "2.8 mi/kWh";   // Highway wind drag penalty
+    let dynamicEfficiency = "4.2 mi/kWh";                     // Baseline City Street Sweet Spot
+    if (speedMph > 45) dynamicEfficiency = "2.8 mi/kWh";   // Freeway Wind Resistance Penalty
     if (speedMph === 0) dynamicEfficiency = "0.0 mi/kWh";  // Stopped / Idle state
 
-  // Look for standard GPS altitude, alternative altitude, or barometer height
-let rawAltitudeMeters = parseFloat(req.query.kff1238) || parseFloat(req.query.kff122b) || parseFloat(req.query.kff1206) || 0;  
-  
-  // 4. Package clean payload
+    // 4. Package clean, pre-scaled data payload for the stream overlay banner
     const telemetryData = {
         distance: tripDistance.toFixed(2) + " mi", 
         speed: Math.round(speedMph) + " mph",
@@ -56,6 +55,7 @@ let rawAltitudeMeters = parseFloat(req.query.kff1238) || parseFloat(req.query.kf
         tax: "$" + taxSaved.toFixed(2)
     };
 
+    // 5. Pipe data instantly to StreamElements
     io.emit('telemetry_update', telemetryData);
     res.send('OK!');
 });
