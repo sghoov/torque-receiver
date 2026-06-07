@@ -41,7 +41,10 @@ app.get('/live', (req, res) => {
     if (speedMph > 45) dynamicEfficiency = "2.8 mi/kWh";   // Highway wind drag penalty
     if (speedMph === 0) dynamicEfficiency = "0.0 mi/kWh";  // Stopped / Idle state
 
-    // 4. Package clean payload
+  // Look for standard GPS altitude, alternative altitude, or barometer height
+let rawAltitudeMeters = parseFloat(req.query.kff1238) || parseFloat(req.query.kff122b) || parseFloat(req.query.kff1206) || 0;  
+  
+  // 4. Package clean payload
     const telemetryData = {
         distance: tripDistance.toFixed(2) + " mi", 
         speed: Math.round(speedMph) + " mph",
