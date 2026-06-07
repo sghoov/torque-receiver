@@ -15,43 +15,33 @@ app.get('/', (req, res) => {
 });
 
 app.get('/live', (req, res) => {
-    // 1. Pull the raw parameters from Torque Pro
-    let rawObd = req.query.k0d ? parseFloat(req.query.k0d) : null;
-    let rawGps = req.query.kff120c ? parseFloat(req.query.kff120c) : null;
-    
-    // Select the best available speed input
-    let obdSpeedKmh = 0;
-    if (rawObd !== null && rawObd >= 0) {
-        obdSpeedKmh = rawObd;
-    } else if (rawGps !== null && rawGps >= 0) {
-        obdSpeedKmh = rawGps;
-    }
-
+    // 1. Pull the raw parameters from Torque Pro (kff1001 is stable calculated speed)
+    let rawSpeedKmh = parseFloat(req.query.kff1001) || parseFloat(req.query.k0d) || parseFloat(req.query.kff120c) || 0;
     let rawAltitudeMeters = parseFloat(req.query.kff1238) || 0; 
-    let rawDistanceMeters = parseFloat(req.query.kff1204) || 0;   
+    let rawDistanceKm = parseFloat(req.query.kff1204) || 0;   
 
-    // 2. Exact Metric-to-Imperial Math Corrections
-    let speedMph = obdSpeedKmh * 0.621371; 
+    // 2. Precise Conversion Math
+    let speedMph = rawSpeedKmh * 0.621371; // Converts stable speed KM/H directly to perfect MPH
     
-    // Absolute Safety Guardrail: If calculated speed is less than 1mph or negative, snap it to a dead 0
-    if (speedMph < 1.0 || speedMph > 160) {
+    // Safety filter for speed jitter when idling or parked
+    if (speedMph < 1.0 || speedMph > 100) {
         speedMph = 0;
     }
     
-    // Convert raw distance structure cleanly 
-    let tripDistance = rawDistanceMeters > 100 ? (rawDistanceMeters * 0.000621371) : rawDistanceMeters;
+    // Convert raw trip distance from kilometers to miles cleanly
+    let tripDistance = rawDistanceKm * 0.621371;
     if (tripDistance < 0) tripDistance = 0;
     
     let taxSaved = tripDistance * MILEAGE_RATE;
 
-    // Dynamic efficiency engine based on real-time speed transitions
+    // Dynamic efficiency curve tracking your speed profile
     let dynamicEfficiency = 4.2; 
     if (speedMph > 65) dynamicEfficiency = 3.4; 
     if (speedMph === 0) dynamicEfficiency = 0.0;
 
     // 3. Package completely clean, pre-scaled numbers for the stream overlay
     const telemetryData = {
-        distance: tripDistance.toFixed(1) + " mi",
+        distance: tripDistance.toFixed(2) + " mi", // Changed to 2 decimals so tiny drives (.12 mi) show up perfectly!
         speed: Math.round(speedMph) + " mph",
         elevation: Math.round(rawAltitudeMeters * 3.28084) + " ft", 
         efficiency: dynamicEfficiency.toFixed(1) + " mi/kWh", 
