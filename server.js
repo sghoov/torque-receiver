@@ -15,8 +15,15 @@ app.get('/', (req, res) => {
 });
 
 app.get('/live', (req, res) => {
-    // 1. Pull true car wheel speed and distance registers from Torque Pro
-    let rawSpeedKmh = parseFloat(req.query.k5) || parseFloat(req.query.k0d) || parseFloat(req.query.kff1001) || 0;
+    // 1. CATCH-ALL SPEED NET: Listens to every common Torque Pro speed PID (OBD, GPS, and Alternate Wheel Sensors)
+    let rawSpeedKmh = 
+        parseFloat(req.query.k5) ||       // OBD Speed (Standard)
+        parseFloat(req.query.k0d) ||      // Engine Speed sensor
+        parseFloat(req.query.kff1202) ||  // Universal GPS Speed register
+        parseFloat(req.query.kff1001) ||  // GPS Speed (Alternate)
+        parseFloat(req.query.v) ||         // Raw Velocity string
+        0;
+
     let rawDistanceKm = parseFloat(req.query.kff1204) || 0;   
     let rawAmbientCelsius = req.query.k46 ? parseFloat(req.query.k46) : null; 
 
