@@ -10,8 +10,30 @@ const io = require('socket.io')(http, {
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
+// Global states to keep track of dynamic iOS Shortcut changes
+let shortcutStartMiles = null;
+let shortcutMaxRange = null;
+
 app.get('/', (req, res) => {
     res.send('Telemetry server is up and running!');
+});
+
+// NEW ENDPOINT: Hit this via iOS Shortcut to update settings instantly on stream
+app.get('/update-range', (req, res) => {
+    if (req.query.startMiles !== undefined) {
+        shortcutStartMiles = parseFloat(req.query.startMiles) || 0;
+    }
+    if (req.query.maxRange !== undefined) {
+        shortcutMaxRange = parseFloat(req.query.maxRange) || 70;
+    }
+
+    // Broadcast change straight down to the StreamElements widget socket
+    io.emit('manual_range_update', {
+        startMiles: shortcutStartMiles,
+        maxRangeInput: shortcutMaxRange
+    });
+
+    res.send(`Successfully updated stream! Start Miles: ${shortcutStartMiles}, Max Range: ${shortcutMaxRange}`);
 });
 
 app.get('/live', (req, res) => {
@@ -30,12 +52,12 @@ app.get('/live', (req, res) => {
     if (Array.isArray(incomingTemp)) incomingTemp = incomingTemp[0];
     let rawAmbientCelsius = incomingTemp ? parseFloat(incomingTemp) : null; 
 
-    // TARGET ACTIVE GPS ALTITUDE (ff1010)
+    // Target Active GPS Altitude (ff1010)
     let incomingAltitude = req.query.kff1010 || 0;
     if (Array.isArray(incomingAltitude)) incomingAltitude = incomingAltitude[0];
     let rawAltitudeMeters = parseFloat(incomingAltitude) || 0; 
 
-    // 2. CONVERSION MATH
+    // 2. CONVERSION MATH (kff1001 sends speed in Kilometers per Hour)
     let speedMph = rawSpeedKmh * 0.621371;
     if (speedMph < 0.8 || speedMph > 110) speedMph = 0;
     
@@ -53,14 +75,13 @@ app.get('/live', (req, res) => {
     // Convert Altitude precisely to feet and apply local Bay Area sea-level adjustment
     let elevationDisplay = "-- ft";
     if (req.query.kff1010) {
-        // Convert raw meters to feet, then add the local calibration offset to match true sea level
         let trueFeet = (rawAltitudeMeters * 3.28084) + 104; 
         elevationDisplay = Math.round(trueFeet) + " ft";
     }
 
     // 3. PACKAGE DYNAMIC PAYLOAD FOR STREAMELEMENTS
     const telemetryData = {
-        distance: tripDistance.toFixed(2) + " mi", 
+        distance: tripDistance.toFixed(1) + " mi", // Tight 1-decimal formatting
         speed: Math.round(speedMph) + " mph",
         elevation: elevationDisplay, 
         temperature: tempFahrenheit,
