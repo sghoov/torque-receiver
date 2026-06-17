@@ -21,7 +21,7 @@ app.get('/live', (req, res) => {
         parseFloat(req.query.k0d) ||      // Engine Speed sensor
         parseFloat(req.query.kff1202) ||  // Universal GPS Speed register
         parseFloat(req.query.kff1001) ||  // GPS Speed (Alternate)
-        parseFloat(req.query.v) ||         // Raw Velocity string
+        parseFloat(req.query.v) ||        // Raw Velocity string
         0;
 
     let rawDistanceKm = parseFloat(req.query.kff1204) || 0;   
@@ -30,9 +30,16 @@ app.get('/live', (req, res) => {
     // MULTI-PID ELEVATION SAFETY NET: Looks for GPS altitude, alternative altitude, or barometer height
     let rawAltitudeMeters = parseFloat(req.query.kff1238) || parseFloat(req.query.kff122b) || parseFloat(req.query.kff1206) || 0; 
 
-    // 2. Conversion Math
-    let speedMph = rawSpeedKmh * 0.621371; 
-    if (speedMph < 1.0 || speedMph > 100) speedMph = 0;
+    // 2. Adaptive Speed Processing (Fixes the low-end clamp bug)
+    let speedMph = rawSpeedKmh;
+    // If the value is raw KMH data, convert it; otherwise keep it as direct MPH
+    if (speedMph > 150) { 
+        speedMph = rawSpeedKmh * 0.621371;
+    }
+    // Simple noise floor clamp so it only drops to zero if the vehicle is genuinely stopped
+    if (speedMph < 0.2 || speedMph > 110) {
+        speedMph = 0;
+    }
     
     let tripDistance = rawDistanceKm * 0.621371;
     if (tripDistance < 0) tripDistance = 0;
@@ -45,24 +52,24 @@ app.get('/live', (req, res) => {
         tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
     }
 
-    // 3. EFFICIENCY ENGINE (Locked to your 4.2 City Baseline)
-    let dynamicEfficiency = "4.2 mi/kWh";                     // Baseline City Street Sweet Spot
-    if (speedMph > 45) dynamicEfficiency = "2.8 mi/kWh";   // Freeway Wind Resistance Penalty
-    if (speedMph === 0) dynamicEfficiency = "0.0 mi/kWh";  // Stopped / Idle state
+    // Convert Altitude precisely to feet
+    let elevationDisplay = "-- ft";
+    if (rawAltitudeMeters !== 0) {
+        elevationDisplay = Math.round(rawAltitudeMeters * 3.28084) + " ft";
+    }
 
-    // 4. Package clean, pre-scaled data payload for the stream overlay banner
+    // 3. Package clean, pre-scaled data payload for the stream overlay banner
     const telemetryData = {
         distance: tripDistance.toFixed(2) + " mi", 
         speed: Math.round(speedMph) + " mph",
-        elevation: Math.round(rawAltitudeMeters * 3.28084) + " ft", 
-        efficiency: dynamicEfficiency, 
+        elevation: elevationDisplay, 
         temperature: tempFahrenheit,
         tripMilesRaw: tripDistance,
         rawSpeed: speedMph,
         tax: "$" + taxSaved.toFixed(2)
     };
 
-    // 5. Pipe data instantly to StreamElements
+    // 4. Pipe data instantly to StreamElements
     io.emit('telemetry_update', telemetryData);
     res.send('OK!');
 });
