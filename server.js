@@ -15,28 +15,35 @@ app.get('/', (req, res) => {
 });
 
 app.get('/live', (req, res) => {
-    // 1. EXTRACTION ZONE: Pull parameters safely from direct keys or index-0 arrays
-    let incomingSpeed = req.query.v || 0;
-    if (Array.isArray(incomingSpeed)) incomingSpeed = incomingSpeed[0];
-    let rawSpeedMs = parseFloat(incomingSpeed) || 0;
+    // 1. SAFE ARRAY EXTRACTION: Target kff1001 directly
+    let incomingSpeed = req.query.kff1001 || 0;
+    
+    // If Torque sends it inside brackets [x, y], extract the first live index element
+    if (Array.isArray(incomingSpeed)) {
+        incomingSpeed = incomingSpeed[0];
+    }
+    
+    let rawSpeedKmh = parseFloat(incomingSpeed) || 0;
 
+    // Handle Distance parameter arrays safely
     let incomingDistance = req.query.kff1204 || 0;
     if (Array.isArray(incomingDistance)) incomingDistance = incomingDistance[0];
     let rawDistanceKm = parseFloat(incomingDistance) || 0;   
 
+    // Handle Temperature parameter arrays safely
     let incomingTemp = req.query.k46 || null;
     if (Array.isArray(incomingTemp)) incomingTemp = incomingTemp[0];
     let rawAmbientCelsius = incomingTemp ? parseFloat(incomingTemp) : null; 
 
+    // Handle Elevation parameter arrays safely
     let incomingAltitude = req.query.kff1238 || req.query.kff122b || 0;
     if (Array.isArray(incomingAltitude)) incomingAltitude = incomingAltitude[0];
     let rawAltitudeMeters = parseFloat(incomingAltitude) || 0; 
 
-    // 2. TRUE ACCURATE CONVERSIONS
-    // 'v' is sent by Torque as Meters per Second. Converting directly to MPH (m/s * 2.23694)
-    let speedMph = rawSpeedMs * 2.23694;
+    // 2. CONVERSION MATH (kff1001 sends speed in Kilometers per Hour)
+    let speedMph = rawSpeedKmh * 0.621371;
     
-    // Noise floor protection floor filter
+    // Clean noise floor clamp
     if (speedMph < 0.8 || speedMph > 110) speedMph = 0;
     
     let tripDistance = rawDistanceKm * 0.621371;
@@ -44,19 +51,19 @@ app.get('/live', (req, res) => {
     
     let taxSaved = tripDistance * MILEAGE_RATE;
 
-    // Convert Ambient Temperature cleanly to Fahrenheit with the custom display offset
+    // Convert Ambient Temperature cleanly to Fahrenheit
     let tempFahrenheit = "--°F";
     if (rawAmbientCelsius !== null) {
         tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
     }
 
-    // Convert Altitude to feet
+    // Convert Altitude precisely to feet
     let elevationDisplay = "-- ft";
     if (rawAltitudeMeters !== 0) {
         elevationDisplay = Math.round(rawAltitudeMeters * 3.28084) + " ft";
     }
 
-    // 3. PACKAGE CLEAN PRE-SCALED PAYLOAD
+    // 3. PACKAGE DYNAMIC PAYLOAD FOR STREAMELEMENTS
     const telemetryData = {
         distance: tripDistance.toFixed(2) + " mi", 
         speed: Math.round(speedMph) + " mph",
@@ -67,7 +74,7 @@ app.get('/live', (req, res) => {
         tax: "$" + taxSaved.toFixed(2)
     };
 
-    // 4. EMIT DIRECTLY TO WIDGET
+    // 4. BEAM IT STRAIGHT TO THE DASH WIDGET
     io.emit('telemetry_update', telemetryData);
     res.send('OK!');
 });
