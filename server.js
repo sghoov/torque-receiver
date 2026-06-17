@@ -51,16 +51,17 @@ app.get('/live', (req, res) => {
     
     let taxSaved = tripDistance * MILEAGE_RATE;
 
-    // Convert Ambient Temperature cleanly to Fahrenheit
+    // Convert Ambient Temperature cleanly to Fahrenheit with a +1 dashboard calibration offset
     let tempFahrenheit = "--°F";
     if (rawAmbientCelsius !== null) {
         tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
     }
 
-    // Convert Altitude precisely to feet
+    // Convert Altitude precisely to feet and apply a +51ft local geoid calibration offset
     let elevationDisplay = "-- ft";
     if (rawAltitudeMeters !== 0) {
-        elevationDisplay = Math.round(rawAltitudeMeters * 3.28084) + " ft";
+        let trueFeet = (rawAltitudeMeters * 3.28084) + 51;
+        elevationDisplay = Math.round(trueFeet) + " ft";
     }
 
     // 3. PACKAGE DYNAMIC PAYLOAD FOR STREAMELEMENTS
