@@ -15,7 +15,7 @@ let shortcutStartMiles = null;
 let shortcutMaxRange = null;
 
 let lastKnownAltitudeMeters = null;
-let accumulatedTerrainAdjustmentMiles = 0.0; // Tracks the running total of regen credits & climb penalties
+let accumulatedTerrainAdjustmentMiles = 0.0; 
 
 app.get('/', (req, res) => {
     res.send('Telemetry physics engine server is up and running safely!');
@@ -66,7 +66,6 @@ app.get('/live', (req, res) => {
         if (Array.isArray(incomingBearing)) incomingBearing = incomingBearing[0];
         let rawBearing = incomingBearing !== null ? parseFloat(incomingBearing) : null;
 
-        // NEW PIDs FOR HIGHWAY PERCENT & MOTOR TORQUE
         let incomingHwyPercent = req.query.kff1297 || 0;
         if (Array.isArray(incomingHwyPercent)) incomingHwyPercent = incomingHwyPercent[0];
         let hwyPercent = parseFloat(incomingHwyPercent) || 0;
@@ -84,41 +83,37 @@ app.get('/live', (req, res) => {
         
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
-        // 3. ADVANCED DRIVING PHYSICS POOL
-        // A. Running Style Base Multiply (0% Penalty on City, Max 22% Penalty on Highway)
-        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.22);
+        // 3. CALIBRATED DRIVING PHYSICS POOL
+        // A. Base Multiply toned down (Max 12% Penalty instead of 22% for Highway segments)
+        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.12);
         let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
 
-        // B. Real-time Terrain Incline & Regen Math (Processed when moving)
+        // B. Real-time Terrain Incline & Regen Math
         if (speedMph > 2) {
-            // Altitude Delta Tracking
             if (lastKnownAltitudeMeters !== null) {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
 
-                if (deltaFeet > 0.5) { 
-                    // CLIMB PENALTY: Going up an incline burns extra battery capacity
-                    let climbWeight = deltaFeet * 0.005; 
+                // 🎯 DEAD-ZONE FILTER: Ignore anything under 3 vertical feet to block out GPS noise jitter
+                if (deltaFeet > 3.0) { 
+                    let climbWeight = deltaFeet * 0.004; // Toned down slope drain weight slightly
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
             lastKnownAltitudeMeters = rawAltitudeMeters;
 
             // RECUPERATIVE BRAKING LOGIC
-            // If vehicle is moving but motor torque reads flat 0, car is in active regen mode
             if (motorTorque === 0) {
-                // Approximate energy recovery calculation (~60% efficiency credit per second)
                 let regenCreditPerSecond = (speedMph / 3600) * 0.60;
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
         } else {
-            // Reset altitude tracking anchor point if vehicle completely stops
             lastKnownAltitudeMeters = rawAltitudeMeters;
         }
 
-        // C. Combine Everything into a Final Dynamic Range Adjustment
+        // C. Combine Into Final Value
         let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
-        if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; // Prevent reverse loops
+        if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
 
         // 4. DISPLAY FORMAT CALCULATIONS
         let tempFahrenheit = "--°F";
@@ -141,13 +136,13 @@ app.get('/live', (req, res) => {
 
         // 5. BEAM PAYLOAD TO WIDGET SCRIPT
         const telemetryData = {
-            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", // Scales range down or up dynamically
+            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
             speed: Math.round(speedMph) + " mph",
             elevation: elevationDisplay, 
             temperature: tempFahrenheit,
             compass: compassHeading,
-            tripMilesRaw: adjustedTripDistanceMiles, // Feeds your left-side battery slider calculation
-            actualSessionMilesRaw: rawTripDistanceMiles, // Feeds your pure "Trip Miles" container box
+            tripMilesRaw: adjustedTripDistanceMiles, 
+            actualSessionMilesRaw: rawTripDistanceMiles, 
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
