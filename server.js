@@ -58,7 +58,8 @@ app.get('/live', (req, res) => {
         if (Array.isArray(incomingAltitude)) incomingAltitude = incomingAltitude[0];
         let rawAltitudeMeters = parseFloat(incomingAltitude) || 0; 
 
-        let incomingBearing = req.query.kff122b || null;
+        // TARGET FIXED GPS BEARING / HEADING (ff123b)
+        let incomingBearing = req.query.kff123b || null;
         if (Array.isArray(incomingBearing)) incomingBearing = incomingBearing[0];
         let rawBearing = incomingBearing !== null ? parseFloat(incomingBearing) : null;
 
@@ -71,17 +72,14 @@ app.get('/live', (req, res) => {
         
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
-        // 🚀 HIGHWAY DRAIN MULTIPLIER LOGIC
-        // City driving (under 50 mph) stays at 1.0x multiplier.
-        // Freeway speeds (50-75+ mph) ramp up progressively from 1.0x to 1.35x extra drain.
+        // HIGHWAY DRAIN MULTIPLIER LOGIC
         let drainMultiplier = 1.0;
         if (speedMph > 50) {
-            let speedFactor = (speedMph - 50) / 25; // Ramps from 0 to 1 between 50mph and 75mph
-            drainMultiplier = 1.0 + (speedFactor * 0.35); // Caps around 1.35x multiplier
-            if (drainMultiplier > 1.4) drainMultiplier = 1.4; // Safety ceiling limit
+            let speedFactor = (speedMph - 50) / 25; 
+            drainMultiplier = 1.0 + (speedFactor * 0.35); 
+            if (drainMultiplier > 1.4) drainMultiplier = 1.4; 
         }
 
-        // Apply the dynamic highway penalty to the tracker calculations
         let adjustedTripDistanceMiles = rawTripDistanceMiles * drainMultiplier;
 
         let tempFahrenheit = "--°F";
@@ -95,6 +93,7 @@ app.get('/live', (req, res) => {
             elevationDisplay = Math.round(trueFeet) + " ft";
         }
 
+        // COMPASS CARDINAL LOGIC: Translates 0-360 degrees from kff123b into directions
         let compassHeading = "--";
         if (rawBearing !== null && !isNaN(rawBearing)) {
             const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -104,13 +103,13 @@ app.get('/live', (req, res) => {
 
         // 3. PACKAGE DYNAMIC PAYLOAD WITH SEPARATED ACTUAL & DRAIN MILEAGE
         const telemetryData = {
-            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", // Adjusted miles drives range number down aggressively
+            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
             speed: Math.round(speedMph) + " mph",
             elevation: elevationDisplay, 
             temperature: tempFahrenheit,
             compass: compassHeading,
-            tripMilesRaw: adjustedTripDistanceMiles, // Feeds range slider calculation
-            actualSessionMilesRaw: rawTripDistanceMiles, // Feeds pure "Trip Miles" display box
+            tripMilesRaw: adjustedTripDistanceMiles, 
+            actualSessionMilesRaw: rawTripDistanceMiles, 
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
