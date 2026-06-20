@@ -10,11 +10,15 @@ const io = require('socket.io')(http, {
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
+// PERSISTENT SERVER STATE STORAGE
 let shortcutStartMiles = null;
 let shortcutMaxRange = null;
 
+let lastKnownAltitudeMeters = null;
+let accumulatedTerrainAdjustmentMiles = 0.0; // Tracks the running total of regen credits & climb penalties
+
 app.get('/', (req, res) => {
-    res.send('Telemetry server is up and running safely!');
+    res.send('Telemetry physics engine server is up and running safely!');
 });
 
 app.get('/update-range', (req, res) => {
@@ -41,7 +45,7 @@ app.get('/update-range', (req, res) => {
 
 app.get('/live', (req, res) => {
     try {
-        // 1. SAFE ARRAY EXTRACTION
+        // 1. SAFE ARRAY PARAMETER EXTRACTION
         let incomingSpeed = req.query.kff1001 || 0;
         if (Array.isArray(incomingSpeed)) incomingSpeed = incomingSpeed[0];
         let rawSpeedKmh = parseFloat(incomingSpeed) || 0;
@@ -58,12 +62,20 @@ app.get('/live', (req, res) => {
         if (Array.isArray(incomingAltitude)) incomingAltitude = incomingAltitude[0];
         let rawAltitudeMeters = parseFloat(incomingAltitude) || 0; 
 
-        // TARGET FIXED GPS BEARING / HEADING (ff123b)
         let incomingBearing = req.query.kff123b || null;
         if (Array.isArray(incomingBearing)) incomingBearing = incomingBearing[0];
         let rawBearing = incomingBearing !== null ? parseFloat(incomingBearing) : null;
 
-        // 2. CONVERSION MATH
+        // NEW PIDs FOR HIGHWAY PERCENT & MOTOR TORQUE
+        let incomingHwyPercent = req.query.kff1297 || 0;
+        if (Array.isArray(incomingHwyPercent)) incomingHwyPercent = incomingHwyPercent[0];
+        let hwyPercent = parseFloat(incomingHwyPercent) || 0;
+
+        let incomingTorque = req.query.kff1225 || 0;
+        if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
+        let motorTorque = parseFloat(incomingTorque) || 0;
+
+        // 2. STANDARD CONVERSIONS
         let speedMph = rawSpeedKmh * 0.621371;
         if (speedMph < 0.8 || speedMph > 110) speedMph = 0;
         
@@ -72,16 +84,43 @@ app.get('/live', (req, res) => {
         
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
-        // HIGHWAY DRAIN MULTIPLIER LOGIC
-        let drainMultiplier = 1.0;
-        if (speedMph > 50) {
-            let speedFactor = (speedMph - 50) / 25; 
-            drainMultiplier = 1.0 + (speedFactor * 0.35); 
-            if (drainMultiplier > 1.4) drainMultiplier = 1.4; 
+        // 3. ADVANCED DRIVING PHYSICS POOL
+        // A. Running Style Base Multiply (0% Penalty on City, Max 22% Penalty on Highway)
+        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.22);
+        let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
+
+        // B. Real-time Terrain Incline & Regen Math (Processed when moving)
+        if (speedMph > 2) {
+            // Altitude Delta Tracking
+            if (lastKnownAltitudeMeters !== null) {
+                let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
+                let deltaFeet = deltaMeters * 3.28084;
+
+                if (deltaFeet > 0.5) { 
+                    // CLIMB PENALTY: Going up an incline burns extra battery capacity
+                    let climbWeight = deltaFeet * 0.005; 
+                    accumulatedTerrainAdjustmentMiles += climbWeight;
+                }
+            }
+            lastKnownAltitudeMeters = rawAltitudeMeters;
+
+            // RECUPERATIVE BRAKING LOGIC
+            // If vehicle is moving but motor torque reads flat 0, car is in active regen mode
+            if (motorTorque === 0) {
+                // Approximate energy recovery calculation (~60% efficiency credit per second)
+                let regenCreditPerSecond = (speedMph / 3600) * 0.60;
+                accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
+            }
+        } else {
+            // Reset altitude tracking anchor point if vehicle completely stops
+            lastKnownAltitudeMeters = rawAltitudeMeters;
         }
 
-        let adjustedTripDistanceMiles = rawTripDistanceMiles * drainMultiplier;
+        // C. Combine Everything into a Final Dynamic Range Adjustment
+        let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
+        if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; // Prevent reverse loops
 
+        // 4. DISPLAY FORMAT CALCULATIONS
         let tempFahrenheit = "--°F";
         if (rawAmbientCelsius !== null) {
             tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
@@ -93,7 +132,6 @@ app.get('/live', (req, res) => {
             elevationDisplay = Math.round(trueFeet) + " ft";
         }
 
-        // COMPASS CARDINAL LOGIC: Translates 0-360 degrees from kff123b into directions
         let compassHeading = "--";
         if (rawBearing !== null && !isNaN(rawBearing)) {
             const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
@@ -101,15 +139,15 @@ app.get('/live', (req, res) => {
             compassHeading = directions[index];
         }
 
-        // 3. PACKAGE DYNAMIC PAYLOAD WITH SEPARATED ACTUAL & DRAIN MILEAGE
+        // 5. BEAM PAYLOAD TO WIDGET SCRIPT
         const telemetryData = {
-            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
+            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", // Scales range down or up dynamically
             speed: Math.round(speedMph) + " mph",
             elevation: elevationDisplay, 
             temperature: tempFahrenheit,
             compass: compassHeading,
-            tripMilesRaw: adjustedTripDistanceMiles, 
-            actualSessionMilesRaw: rawTripDistanceMiles, 
+            tripMilesRaw: adjustedTripDistanceMiles, // Feeds your left-side battery slider calculation
+            actualSessionMilesRaw: rawTripDistanceMiles, // Feeds your pure "Trip Miles" container box
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
