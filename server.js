@@ -70,6 +70,7 @@ app.get('/live', (req, res) => {
         if (Array.isArray(incomingHwyPercent)) incomingHwyPercent = incomingHwyPercent[0];
         let hwyPercent = parseFloat(incomingHwyPercent) || 0;
 
+        // Using your custom engine power/torque percentage PID
         let incomingTorque = req.query.kff1225 || 0;
         if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
         let motorTorque = parseFloat(incomingTorque) || 0;
@@ -83,20 +84,20 @@ app.get('/live', (req, res) => {
         
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
-        // 3. CALIBRATED DRIVING PHYSICS POOL
-        // A. Base Multiply toned down (Max 12% Penalty instead of 22% for Highway segments)
-        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.12);
+        // 3. PERFECTED DRIVING PHYSICS POOL
+        // 🎯 TUNED: Highway penalty bumped up to 18% max to split the difference
+        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.18);
         let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
 
-        // B. Real-time Terrain Incline & Regen Math
+        // Real-time Terrain Incline & Regen Math
         if (speedMph > 2) {
             if (lastKnownAltitudeMeters !== null) {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
 
-                // 🎯 DEAD-ZONE FILTER: Ignore anything under 3 vertical feet to block out GPS noise jitter
+                // Keep dead-zone to block GPS noise
                 if (deltaFeet > 3.0) { 
-                    let climbWeight = deltaFeet * 0.004; // Toned down slope drain weight slightly
+                    let climbWeight = deltaFeet * 0.004; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
@@ -104,14 +105,15 @@ app.get('/live', (req, res) => {
 
             // RECUPERATIVE BRAKING LOGIC
             if (motorTorque === 0) {
-                let regenCreditPerSecond = (speedMph / 3600) * 0.60;
+                // 🎯 TUNED: Lowered recovery efficiency to 45% so it doesn't add too much fake range
+                let regenCreditPerSecond = (speedMph / 3600) * 0.45;
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
         } else {
             lastKnownAltitudeMeters = rawAltitudeMeters;
         }
 
-        // C. Combine Into Final Value
+        // Combine Into Final Value
         let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
         if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
 
