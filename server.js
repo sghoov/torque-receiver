@@ -2,10 +2,10 @@ const express = require('express');
 const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http, {
-  cors: { 
-    origin: "*",
-    methods: ["GET", "POST"]
-  }
+    cors: { 
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
 });
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
@@ -16,6 +16,12 @@ let shortcutMaxRange = null;
 
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
+
+// GEOCODING CACHE TO PREVENT API OVERUSE
+let currentCityDisplay = "--";
+let lastGeocodeTime = 0;
+let lastLat = null;
+let lastLon = null;
 
 app.get('/', (req, res) => {
     res.send('Telemetry physics engine server is up and running safely!');
@@ -43,7 +49,7 @@ app.get('/update-range', (req, res) => {
     }
 });
 
-app.get('/live', (req, res) => {
+app.get('/live', async (req, res) => {
     try {
         // 1. SAFE ARRAY PARAMETER EXTRACTION
         let incomingSpeed = req.query.kff1001 || 0;
@@ -70,10 +76,18 @@ app.get('/live', (req, res) => {
         if (Array.isArray(incomingHwyPercent)) incomingHwyPercent = incomingHwyPercent[0];
         let hwyPercent = parseFloat(incomingHwyPercent) || 0;
 
-        // Using your custom engine power/torque percentage PID
         let incomingTorque = req.query.kff1225 || 0;
         if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
         let motorTorque = parseFloat(incomingTorque) || 0;
+
+        // GPS Coordinates from Torque Pro
+        let incomingLat = req.query.kff1006 || null;
+        if (Array.isArray(incomingLat)) incomingLat = incomingLat[0];
+        let rawLat = incomingLat ? parseFloat(incomingLat) : null;
+
+        let incomingLon = req.query.kff1005 || null;
+        if (Array.isArray(incomingLon)) incomingLon = incomingLon[0];
+        let rawLon = incomingLon ? parseFloat(incomingLon) : null;
 
         // 2. STANDARD CONVERSIONS
         let speedMph = rawSpeedKmh * 0.621371;
@@ -85,7 +99,6 @@ app.get('/live', (req, res) => {
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
         // 3. PERFECTED DRIVING PHYSICS POOL
-        // 🎯 TUNED: Highway penalty bumped up to 18% max to split the difference
         let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.18);
         let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
 
@@ -95,7 +108,6 @@ app.get('/live', (req, res) => {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
 
-                // Keep dead-zone to block GPS noise
                 if (deltaFeet > 3.0) { 
                     let climbWeight = deltaFeet * 0.004; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
@@ -105,7 +117,6 @@ app.get('/live', (req, res) => {
 
             // RECUPERATIVE BRAKING LOGIC
             if (motorTorque === 0) {
-                // 🎯 TUNED: Lowered recovery efficiency to 45% so it doesn't add too much fake range
                 let regenCreditPerSecond = (speedMph / 3600) * 0.45;
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
@@ -117,7 +128,30 @@ app.get('/live', (req, res) => {
         let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
         if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
 
-        // 4. DISPLAY FORMAT CALCULATIONS
+        // 4. REVERSE GEOCODING ENGINE (CITY LOOKUP)
+        const now = Date.now();
+        if (rawLat && rawLon && (rawLat !== lastLat || rawLon !== lastLon) && (now - lastGeocodeTime > 10000)) {
+            lastLat = rawLat;
+            lastLon = rawLon;
+            lastGeocodeTime = now;
+
+            try {
+                const geoResponse = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${rawLat}&longitude=${rawLon}&localityLanguage=en`);
+                if (geoResponse.ok) {
+                    const geoData = await geoResponse.json();
+                    const city = geoData.city || geoData.locality || "";
+                    const state = geoData.principalSubdivisionCode ? geoData.principalSubdivisionCode.split('-')[1] : "";
+                    
+                    if (city) {
+                        currentCityDisplay = state ? `${city}, ${state}` : city;
+                    }
+                }
+            } catch (geoErr) {
+                console.error('Geocoding dynamic fetch error:', geoErr.message);
+            }
+        }
+
+        // 5. DISPLAY FORMAT CALCULATIONS
         let tempFahrenheit = "--°F";
         if (rawAmbientCelsius !== null) {
             tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
@@ -136,13 +170,14 @@ app.get('/live', (req, res) => {
             compassHeading = directions[index];
         }
 
-        // 5. BEAM PAYLOAD TO WIDGET SCRIPT
+        // 6. BEAM PAYLOAD TO WIDGET SCRIPT
         const telemetryData = {
             distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
             speed: Math.round(speedMph) + " mph",
             elevation: elevationDisplay, 
             temperature: tempFahrenheit,
             compass: compassHeading,
+            city: currentCityDisplay, // Added for your pin widget
             tripMilesRaw: adjustedTripDistanceMiles, 
             actualSessionMilesRaw: rawTripDistanceMiles, 
             rawSpeed: speedMph,
