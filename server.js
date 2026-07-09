@@ -17,8 +17,8 @@ let shortcutMaxRange = null;
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
 
-// GEOCODING CACHE TO PREVENT API OVERUSE (NOW STICKY)
-let currentCityDisplay = "PACIFICA, CA"; // Set your home base as the starting sticky fallback
+// GEOCODING CACHE TO PREVENT API OVERUSE (STAYS STICKY)
+let currentCityDisplay = "PACIFICA"; // Initial default fallback
 let lastGeocodeTime = 0;
 let lastLat = null;
 let lastLon = null;
@@ -27,7 +27,7 @@ app.get('/', (req, res) => {
     res.send('Telemetry physics engine server is up and running safely!');
 });
 
-// NEW ENDPOINT: Let the widget poll the last known city instantly on load
+// Let the widget poll the last known city instantly on load
 app.get('/current-city', (req, res) => {
     res.json({ city: currentCityDisplay });
 });
@@ -105,100 +105,4 @@ app.get('/live', async (req, res) => {
 
         // 3. PERFECTED DRIVING PHYSICS POOL
         let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.18);
-        let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
-
-        // Real-time Terrain Incline & Regen Math
-        if (speedMph > 2) {
-            if (lastKnownAltitudeMeters !== null) {
-                let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
-                let deltaFeet = deltaMeters * 3.28084;
-
-                if (deltaFeet > 3.0) { 
-                    let climbWeight = deltaFeet * 0.004; 
-                    accumulatedTerrainAdjustmentMiles += climbWeight;
-                }
-            }
-            lastKnownAltitudeMeters = rawAltitudeMeters;
-
-            // RECUPERATIVE BRAKING LOGIC
-            if (motorTorque === 0) {
-                let regenCreditPerSecond = (speedMph / 3600) * 0.45;
-                accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
-            }
-        } else {
-            lastKnownAltitudeMeters = rawAltitudeMeters;
-        }
-
-        // Combine Into Final Value
-        let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
-        if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
-
-        // 4. REVERSE GEOCODING ENGINE (CITY LOOKUP)
-        const now = Date.now();
-        if (rawLat && rawLon && (rawLat !== lastLat || rawLon !== lastLon) && (now - lastGeocodeTime > 10000)) {
-            lastLat = rawLat;
-            lastLon = rawLon;
-            lastGeocodeTime = now;
-
-            try {
-                const geoResponse = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${rawLat}&longitude=${rawLon}&localityLanguage=en`);
-                if (geoResponse.ok) {
-                    const geoData = await geoResponse.json();
-                    const city = geoData.city || geoData.locality || "";
-                    const state = geoData.principalSubdivisionCode ? geoData.principalSubdivisionCode.split('-')[1] : "";
-                    
-                    if (city) {
-                        currentCityDisplay = state ? `${city}, ${state}` : city;
-                    }
-                }
-            } catch (geoErr) {
-                console.error('Geocoding dynamic fetch error:', geoErr.message);
-            }
-        }
-
-        // 5. DISPLAY FORMAT CALCULATIONS
-        let tempFahrenheit = "--°F";
-        if (rawAmbientCelsius !== null) {
-            tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
-        }
-
-        let elevationDisplay = "-- ft";
-        if (req.query.kff1010) {
-            let trueFeet = (rawAltitudeMeters * 3.28084) + 104; 
-            elevationDisplay = Math.round(trueFeet) + " ft";
-        }
-
-        let compassHeading = "--";
-        if (rawBearing !== null && !isNaN(rawBearing)) {
-            const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-            let index = Math.round(((rawBearing % 360) / 45)) % 8;
-            compassHeading = directions[index];
-        }
-
-        // 6. BEAM PAYLOAD TO WIDGET SCRIPT
-        const telemetryData = {
-            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
-            speed: Math.round(speedMph) + " mph",
-            elevation: elevationDisplay, 
-            temperature: tempFahrenheit,
-            compass: compassHeading,
-            city: currentCityDisplay, 
-            tripMilesRaw: adjustedTripDistanceMiles, 
-            actualSessionMilesRaw: rawTripDistanceMiles, 
-            rawSpeed: speedMph,
-            tax: "$" + taxSaved.toFixed(2)
-        };
-
-        io.emit('telemetry_update', telemetryData);
-        res.send('OK!');
-
-    } catch (liveError) {
-        console.error('Error handling live Torque packet:', liveError.message);
-        res.send('OK!');
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+        let baseWeightedMiles =
