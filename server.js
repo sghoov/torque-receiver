@@ -17,14 +17,19 @@ let shortcutMaxRange = null;
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
 
-// GEOCODING CACHE TO PREVENT API OVERUSE
-let currentCityDisplay = "--";
+// GEOCODING CACHE TO PREVENT API OVERUSE (NOW STICKY)
+let currentCityDisplay = "PACIFICA, CA"; // Set your home base as the starting sticky fallback
 let lastGeocodeTime = 0;
 let lastLat = null;
 let lastLon = null;
 
 app.get('/', (req, res) => {
     res.send('Telemetry physics engine server is up and running safely!');
+});
+
+// NEW ENDPOINT: Let the widget poll the last known city instantly on load
+app.get('/current-city', (req, res) => {
+    res.json({ city: currentCityDisplay });
 });
 
 app.get('/update-range', (req, res) => {
@@ -177,7 +182,7 @@ app.get('/live', async (req, res) => {
             elevation: elevationDisplay, 
             temperature: tempFahrenheit,
             compass: compassHeading,
-            city: currentCityDisplay, // Added for your pin widget
+            city: currentCityDisplay, 
             tripMilesRaw: adjustedTripDistanceMiles, 
             actualSessionMilesRaw: rawTripDistanceMiles, 
             rawSpeed: speedMph,
