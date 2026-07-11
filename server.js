@@ -117,7 +117,7 @@ app.get('/live', async (req, res) => {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
                 if (deltaFeet > 3.0) { 
-                    let climbWeight = deltaFeet * 0.004; 
+                    let climbWeight = deltaFeet * 0.0055; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
