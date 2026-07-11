@@ -10,8 +10,10 @@ const io = require('socket.io')(http, {
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
+// PERSISTENT SERVER STATE STORAGE
 let shortcutStartMiles = null;
 let shortcutMaxRange = null;
+
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
 
@@ -30,6 +32,17 @@ app.get('/current-city', (req, res) => {
 
 app.get('/update-range', (req, res) => {
     try {
+        // 🎯 NEW RESET MECHANISM: Wipes out hill penalties and regen credits instantly
+        if (req.query.reset === 'true') {
+            accumulatedTerrainAdjustmentMiles = 0.0;
+            lastKnownAltitudeMeters = null;
+            io.emit('manual_range_update', {
+                startMiles: shortcutStartMiles !== null ? shortcutStartMiles : 0,
+                maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
+            });
+            return res.send('Success: Accumulated terrain math and hill penalties have been reset to 0.0!');
+        }
+
         let parsedStart = parseFloat(req.query.startMiles);
         let parsedRange = parseFloat(req.query.maxRange);
         if (!isNaN(parsedStart)) shortcutStartMiles = parsedStart;
@@ -95,6 +108,7 @@ app.get('/live', async (req, res) => {
         if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
+        // Base Multiply (Max 18% Penalty for Highway segments)
         let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.18);
         let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
 
@@ -144,7 +158,7 @@ app.get('/live', async (req, res) => {
             elevation: elevationDisplay, 
             temperature: tempFahrenheit,
             compass: compassHeading,
-            lat: currentLat, // Expose raw coordinate updates via sockets
+            lat: currentLat, 
             lon: currentLon,
             tripMilesRaw: adjustedTripDistanceMiles, 
             actualSessionMilesRaw: rawTripDistanceMiles, 
