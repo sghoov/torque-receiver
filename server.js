@@ -123,7 +123,8 @@ app.get('/live', async (req, res) => {
             }
             lastKnownAltitudeMeters = rawAltitudeMeters;
 
-            if (motorTorque === 0) {
+            // 🎯 FIXED: Changed from === 0 to <= 0 to capture true negative regen torque values downhill
+            if (motorTorque <= 0) {
                 let regenCreditPerSecond = (speedMph / 3600) * 0.45;
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
