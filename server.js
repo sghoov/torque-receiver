@@ -17,6 +17,10 @@ let shortcutMaxRange = null;
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
 
+// 🎯 NEW: BASELINE SNAPSHOT FOR RANGE RESET
+let rangeDistanceBaseline = 0.0; 
+let latestRawDistanceMiles = 0.0;
+
 // STICKY GPS STORAGE: Default to Pacifica
 let currentLat = 37.6017; 
 let currentLon = -122.4868;
@@ -32,15 +36,22 @@ app.get('/current-city', (req, res) => {
 
 app.get('/update-range', (req, res) => {
     try {
-        // 🎯 NEW RESET MECHANISM: Wipes out hill penalties and regen credits instantly
+        // 🎯 FIXED RESET MECHANISM:
+        // Wipes out hill penalties AND snapshots current distance baseline so Torque doesn't need to be reset!
         if (req.query.reset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
+            
+            // Lock in current raw miles as the baseline for range calculations
+            rangeDistanceBaseline = latestRawDistanceMiles;
+
             io.emit('manual_range_update', {
                 startMiles: shortcutStartMiles !== null ? shortcutStartMiles : 0,
                 maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
             });
-            return res.send('Success: Accumulated terrain math and hill penalties have been reset to 0.0!');
+
+            console.log(`[Range Reset] Range baseline set to: ${rangeDistanceBaseline.toFixed(2)} mi`);
+            return res.send(`Success: Range reset to 0.0! (Baseline: ${rangeDistanceBaseline.toFixed(2)} mi)`);
         }
 
         let parsedStart = parseFloat(req.query.startMiles);
@@ -92,7 +103,7 @@ app.get('/live', async (req, res) => {
         if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
         let motorTorque = parseFloat(incomingTorque) || 0;
 
-        // --- PERSISTENCE FIX APPLIED BELOW ---
+        // --- PERSISTENCE FIX ---
         let incomingLat = req.query.kff1006 || null;
         if (Array.isArray(incomingLat)) incomingLat = incomingLat[0];
         let latIn = parseFloat(incomingLat);
@@ -102,17 +113,24 @@ app.get('/live', async (req, res) => {
         if (Array.isArray(incomingLon)) incomingLon = incomingLon[0];
         let lonIn = parseFloat(incomingLon);
         if (!isNaN(lonIn) && lonIn !== 0) currentLon = lonIn;
-        // --- END OF FIX ---
 
         let speedMph = rawSpeedKmh * 0.621371;
         if (speedMph < 0.8 || speedMph > 110) speedMph = 0;
         
         let rawTripDistanceMiles = rawDistanceKm * 0.621371;
         if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
+
+        // 🎯 STORE LATEST RAW MILES FOR RESET SNAPSHOTS
+        latestRawDistanceMiles = rawTripDistanceMiles;
+
+        // 🎯 CALCULATE DISTANCE DRIVEN ON CURRENT CHARGE (RAW - BASELINE)
+        let milesOnCurrentCharge = Math.max(0, rawTripDistanceMiles - rangeDistanceBaseline);
+
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
+        // Apply style multiplier ONLY to distance driven on this charge
         let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.18);
-        let baseWeightedMiles = rawTripDistanceMiles * styleMultiplier;
+        let baseWeightedMiles = milesOnCurrentCharge * styleMultiplier;
 
         if (speedMph > 2) {
             if (lastKnownAltitudeMeters !== null) {
@@ -162,8 +180,8 @@ app.get('/live', async (req, res) => {
             compass: compassHeading,
             lat: currentLat, 
             lon: currentLon,
-            tripMilesRaw: adjustedTripDistanceMiles, 
-            actualSessionMilesRaw: rawTripDistanceMiles, 
+            tripMilesRaw: adjustedTripDistanceMiles,           // 🎯 Drives Range Slider (Resets to 0.0 via URL)
+            actualSessionMilesRaw: rawTripDistanceMiles,        // 🎯 Drives "Trip Miles" readout (Never resets during stream)
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
