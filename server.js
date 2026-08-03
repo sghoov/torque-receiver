@@ -21,6 +21,10 @@ let accumulatedTerrainAdjustmentMiles = 0.0;
 let rangeDistanceBaseline = 0.0; 
 let latestRawDistanceMiles = 0.0;
 
+// 🛡️ TORQUE AUTO-RESET GUARD STATE
+let savedPreviousTripsMiles = 0.0;
+let lastKnownRawMiles = 0.0;
+
 // STICKY GPS STORAGE: Default to Pacifica
 let currentLat = 37.6017; 
 let currentLon = -122.4868;
@@ -29,7 +33,6 @@ app.get('/', (req, res) => {
     res.send('Telemetry physics engine server is up and running safely!');
 });
 
-// Expose raw GPS endpoints directly to the widget client
 app.get('/current-city', (req, res) => {
     res.json({ lat: currentLat, lon: currentLon });
 });
@@ -118,15 +121,26 @@ app.get('/live', async (req, res) => {
         let rawTripDistanceMiles = rawDistanceKm * 0.621371;
         if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
 
+        // 🛡️ TORQUE AUTO-RESET DETECTION GUARD
+        // If Torque suddenly drops its trip distance back to 0.0 (e.g. after a 30 min pause)
+        if (rawTripDistanceMiles < (lastKnownRawMiles - 0.5) && lastKnownRawMiles > 0) {
+            savedPreviousTripsMiles += lastKnownRawMiles;
+            rangeDistanceBaseline = 0.0; // Reset range baseline snapshot since Torque reset
+            console.log(`[Torque Auto-Reset Guard] Saved ${lastKnownRawMiles.toFixed(2)} mi before Torque reset!`);
+        }
+        lastKnownRawMiles = rawTripDistanceMiles;
+
+        // Cumulative Stream Miles (Safe from Torque resets)
+        let trueSessionMiles = savedPreviousTripsMiles + rawTripDistanceMiles;
+
         // Store latest raw miles snapshot
         latestRawDistanceMiles = rawTripDistanceMiles;
 
         // Distance driven on current charge
         let milesOnCurrentCharge = Math.max(0, rawTripDistanceMiles - rangeDistanceBaseline);
-        let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
+        let taxSaved = trueSessionMiles * MILEAGE_RATE;
 
         // --- ENHANCED AGGRESSIVE MULTIPLIERS ---
-        // 1. Direct speed penalty over 55 mph + Torque HWY percentage
         let speedPenalty = 0.0;
         if (speedMph > 55) {
             speedPenalty = Math.min(0.35, ((speedMph - 55) / 20) * 0.35); // Up to 35% extra drain at 75mph
@@ -134,7 +148,6 @@ app.get('/live', async (req, res) => {
         let hwyPenalty = (hwyPercent / 100) * 0.20; 
         let styleMultiplier = 1.0 + speedPenalty + hwyPenalty;
 
-        // 2. Global Aggression Factor (1.15x baseline depletion multiplier)
         let baseWeightedMiles = (milesOnCurrentCharge * styleMultiplier) * 1.15;
 
         if (speedMph > 2) {
@@ -142,14 +155,13 @@ app.get('/live', async (req, res) => {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
                 if (deltaFeet > 1.5) { 
-                    let climbWeight = deltaFeet * 0.010; // Hill climb drain
+                    let climbWeight = deltaFeet * 0.010; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
             lastKnownAltitudeMeters = rawAltitudeMeters;
 
             if (motorTorque <= 0) {
-                // REDUCED REGEN RETURN (0.20 instead of 0.70) so coasting doesn't refund too much range
                 let regenCreditPerSecond = (speedMph / 3600) * 0.20; 
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
@@ -187,7 +199,7 @@ app.get('/live', async (req, res) => {
             lat: currentLat, 
             lon: currentLon,
             tripMilesRaw: adjustedTripDistanceMiles,           // Drives Range Slider
-            actualSessionMilesRaw: rawTripDistanceMiles,        // Drives "Trip Miles" Stream Odometer
+            actualSessionMilesRaw: trueSessionMiles,            // 🛡️ Drives Stream Odometer (Safe from Torque resets)
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
