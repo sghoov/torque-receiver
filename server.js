@@ -129,7 +129,7 @@ app.get('/live', async (req, res) => {
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
         // Apply style multiplier ONLY to distance driven on this charge
-        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.18);
+        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.30);
         let baseWeightedMiles = milesOnCurrentCharge * styleMultiplier;
 
         if (speedMph > 2) {
@@ -137,14 +137,14 @@ app.get('/live', async (req, res) => {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
                 if (deltaFeet > 1.5) { 
-                    let climbWeight = deltaFeet * 0.0055; 
+                    let climbWeight = deltaFeet * 0.010; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
             lastKnownAltitudeMeters = rawAltitudeMeters;
 
             if (motorTorque <= 0) {
-                let regenCreditPerSecond = (speedMph / 3600) * 0.45;
+                let regenCreditPerSecond = (speedMph / 3600) * 0.70;
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
         } else {
