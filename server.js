@@ -17,7 +17,7 @@ let shortcutMaxRange = null;
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
 
-// 🎯 NEW: BASELINE SNAPSHOT FOR RANGE RESET
+// BASELINE SNAPSHOT FOR RANGE RESET
 let rangeDistanceBaseline = 0.0; 
 let latestRawDistanceMiles = 0.0;
 
@@ -36,8 +36,6 @@ app.get('/current-city', (req, res) => {
 
 app.get('/update-range', (req, res) => {
     try {
-        // 🎯 FIXED RESET MECHANISM:
-        // Wipes out hill penalties AND snapshots current distance baseline so Torque doesn't need to be reset!
         if (req.query.reset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
@@ -103,7 +101,7 @@ app.get('/live', async (req, res) => {
         if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
         let motorTorque = parseFloat(incomingTorque) || 0;
 
-        // --- PERSISTENCE FIX ---
+        // PERSISTENCE FIX
         let incomingLat = req.query.kff1006 || null;
         if (Array.isArray(incomingLat)) incomingLat = incomingLat[0];
         let latIn = parseFloat(incomingLat);
@@ -120,31 +118,39 @@ app.get('/live', async (req, res) => {
         let rawTripDistanceMiles = rawDistanceKm * 0.621371;
         if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
 
-        // 🎯 STORE LATEST RAW MILES FOR RESET SNAPSHOTS
+        // Store latest raw miles snapshot
         latestRawDistanceMiles = rawTripDistanceMiles;
 
-        // 🎯 CALCULATE DISTANCE DRIVEN ON CURRENT CHARGE (RAW - BASELINE)
+        // Distance driven on current charge
         let milesOnCurrentCharge = Math.max(0, rawTripDistanceMiles - rangeDistanceBaseline);
-
         let taxSaved = rawTripDistanceMiles * MILEAGE_RATE;
 
-        // Apply style multiplier ONLY to distance driven on this charge
-        let styleMultiplier = 1.0 + ((hwyPercent / 100) * 0.30);
-        let baseWeightedMiles = milesOnCurrentCharge * styleMultiplier;
+        // --- ENHANCED AGGRESSIVE MULTIPLIERS ---
+        // 1. Direct speed penalty over 55 mph + Torque HWY percentage
+        let speedPenalty = 0.0;
+        if (speedMph > 55) {
+            speedPenalty = Math.min(0.35, ((speedMph - 55) / 20) * 0.35); // Up to 35% extra drain at 75mph
+        }
+        let hwyPenalty = (hwyPercent / 100) * 0.20; 
+        let styleMultiplier = 1.0 + speedPenalty + hwyPenalty;
+
+        // 2. Global Aggression Factor (1.15x baseline depletion multiplier)
+        let baseWeightedMiles = (milesOnCurrentCharge * styleMultiplier) * 1.15;
 
         if (speedMph > 2) {
             if (lastKnownAltitudeMeters !== null) {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
                 if (deltaFeet > 1.5) { 
-                    let climbWeight = deltaFeet * 0.010; 
+                    let climbWeight = deltaFeet * 0.010; // Hill climb drain
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
             lastKnownAltitudeMeters = rawAltitudeMeters;
 
             if (motorTorque <= 0) {
-                let regenCreditPerSecond = (speedMph / 3600) * 0.70;
+                // REDUCED REGEN RETURN (0.20 instead of 0.70) so coasting doesn't refund too much range
+                let regenCreditPerSecond = (speedMph / 3600) * 0.20; 
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
         } else {
@@ -180,8 +186,8 @@ app.get('/live', async (req, res) => {
             compass: compassHeading,
             lat: currentLat, 
             lon: currentLon,
-            tripMilesRaw: adjustedTripDistanceMiles,           // 🎯 Drives Range Slider (Resets to 0.0 via URL)
-            actualSessionMilesRaw: rawTripDistanceMiles,        // 🎯 Drives "Trip Miles" readout (Never resets during stream)
+            tripMilesRaw: adjustedTripDistanceMiles,           // Drives Range Slider
+            actualSessionMilesRaw: rawTripDistanceMiles,        // Drives "Trip Miles" Stream Odometer
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
