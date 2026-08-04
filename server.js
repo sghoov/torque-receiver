@@ -142,8 +142,8 @@ app.get('/live', async (req, res) => {
         // --- CALIBRATED RANGE MULTIPLIERS ---
         // 1. Moderate speed penalty starting at 58 mph (max +18% at 75mph)
         let speedPenalty = 0.0;
-        if (speedMph > 58) {
-            speedPenalty = Math.min(0.18, ((speedMph - 58) / 17) * 0.18); 
+        if (speedMph > 53) {
+            speedPenalty = Math.min(0.18, ((speedMph - 53) / 17) * 0.18); 
         }
         let hwyPenalty = (hwyPercent / 100) * 0.10; 
         let styleMultiplier = 1.0 + speedPenalty + hwyPenalty;
