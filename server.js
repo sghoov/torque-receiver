@@ -76,41 +76,52 @@ app.get('/update-range', (req, res) => {
 
 app.get('/live', async (req, res) => {
     try {
-        let incomingSpeed = req.query.kff1001 || 0;
+        // Lowercase all incoming URL query keys to make Torque parameter keys case-insensitive
+        const params = {};
+        for (let key in req.query) {
+            params[key.toLowerCase()] = req.query[key];
+        }
+
+        let incomingSpeed = params['kff1001'] || 0;
         if (Array.isArray(incomingSpeed)) incomingSpeed = incomingSpeed[0];
         let rawSpeedKmh = parseFloat(incomingSpeed) || 0;
 
-        let incomingDistance = req.query.kff1204 || 0;
+        let incomingDistance = params['kff1204'] || 0;
         if (Array.isArray(incomingDistance)) incomingDistance = incomingDistance[0];
         let rawDistanceKm = parseFloat(incomingDistance) || 0;   
 
-        let incomingTemp = req.query.k46 || null;
+        // Safe Temperature Parsing (handles empty strings, K46/k46, and NaN cleanly)
+        let incomingTemp = params['k46'] || null;
         if (Array.isArray(incomingTemp)) incomingTemp = incomingTemp[0];
-        let rawAmbientCelsius = incomingTemp ? parseFloat(incomingTemp) : null; 
+        
+        let rawAmbientCelsius = null;
+        if (incomingTemp !== null && incomingTemp !== "" && !isNaN(parseFloat(incomingTemp))) {
+            rawAmbientCelsius = parseFloat(incomingTemp);
+        }
 
-        let incomingAltitude = req.query.kff1010 || 0;
+        let incomingAltitude = params['kff1010'] || 0;
         if (Array.isArray(incomingAltitude)) incomingAltitude = incomingAltitude[0];
         let rawAltitudeMeters = parseFloat(incomingAltitude) || 0; 
 
-        let incomingBearing = req.query.kff123b || null;
+        let incomingBearing = params['kff123b'] || null;
         if (Array.isArray(incomingBearing)) incomingBearing = incomingBearing[0];
-        let rawBearing = incomingBearing !== null ? parseFloat(incomingBearing) : null;
+        let rawBearing = (incomingBearing !== null && !isNaN(parseFloat(incomingBearing))) ? parseFloat(incomingBearing) : null;
 
-        let incomingHwyPercent = req.query.kff1297 || 0;
+        let incomingHwyPercent = params['kff1297'] || 0;
         if (Array.isArray(incomingHwyPercent)) incomingHwyPercent = incomingHwyPercent[0];
         let hwyPercent = parseFloat(incomingHwyPercent) || 0;
 
-        let incomingTorque = req.query.kff1225 || 0;
+        let incomingTorque = params['kff1225'] || 0;
         if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
         let motorTorque = parseFloat(incomingTorque) || 0;
 
         // PERSISTENCE FIX
-        let incomingLat = req.query.kff1006 || null;
+        let incomingLat = params['kff1006'] || null;
         if (Array.isArray(incomingLat)) incomingLat = incomingLat[0];
         let latIn = parseFloat(incomingLat);
         if (!isNaN(latIn) && latIn !== 0) currentLat = latIn;
 
-        let incomingLon = req.query.kff1005 || null;
+        let incomingLon = params['kff1005'] || null;
         if (Array.isArray(incomingLon)) incomingLon = incomingLon[0];
         let lonIn = parseFloat(incomingLon);
         if (!isNaN(lonIn) && lonIn !== 0) currentLon = lonIn;
@@ -140,7 +151,6 @@ app.get('/live', async (req, res) => {
         let taxSaved = trueSessionMiles * MILEAGE_RATE;
 
         // --- CALIBRATED RANGE MULTIPLIERS ---
-        // 1. Moderate speed penalty starting at 58 mph (max +18% at 75mph)
         let speedPenalty = 0.0;
         if (speedMph > 53) {
             speedPenalty = Math.min(0.18, ((speedMph - 53) / 17) * 0.18); 
@@ -148,7 +158,6 @@ app.get('/live', async (req, res) => {
         let hwyPenalty = (hwyPercent / 100) * 0.10; 
         let styleMultiplier = 1.0 + speedPenalty + hwyPenalty;
 
-        // 2. Calibrated global multiplier (1.05x instead of 1.15x)
         let baseWeightedMiles = (milesOnCurrentCharge * styleMultiplier) * 1.05;
 
         if (speedMph > 2) {
@@ -156,7 +165,6 @@ app.get('/live', async (req, res) => {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
                 if (deltaFeet > 2.0) { 
-                    // Calibrated hill weight (0.006)
                     let climbWeight = deltaFeet * 0.006; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
@@ -180,7 +188,7 @@ app.get('/live', async (req, res) => {
         }
 
         let elevationDisplay = "-- ft";
-        if (req.query.kff1010) {
+        if (params['kff1010']) {
             let trueFeet = (rawAltitudeMeters * 3.28084) + 104; 
             elevationDisplay = Math.round(trueFeet) + " ft";
         }
