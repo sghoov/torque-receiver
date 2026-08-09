@@ -42,6 +42,8 @@ app.get('/update-range', (req, res) => {
         if (req.query.reset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
+            savedPreviousTripsMiles = 0.0;
+            lastKnownRawMiles = 0.0;
             
             // Lock in current raw miles as the baseline for range calculations
             rangeDistanceBaseline = latestRawDistanceMiles;
@@ -51,8 +53,8 @@ app.get('/update-range', (req, res) => {
                 maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
             });
 
-            console.log(`[Range Reset] Range baseline set to: ${rangeDistanceBaseline.toFixed(2)} mi`);
-            return res.send(`Success: Range reset to 0.0! (Baseline: ${rangeDistanceBaseline.toFixed(2)} mi)`);
+            console.log(`[Range Reset] Full server reset completed! Baseline: ${rangeDistanceBaseline.toFixed(2)} mi`);
+            return res.send(`Success: Full range and session miles reset to 0.0!`);
         }
 
         let parsedStart = parseFloat(req.query.startMiles);
@@ -90,7 +92,7 @@ app.get('/live', async (req, res) => {
         if (Array.isArray(incomingDistance)) incomingDistance = incomingDistance[0];
         let rawDistanceKm = parseFloat(incomingDistance) || 0;   
 
-        // Safe Temperature Parsing (handles empty strings, K46/k46, and NaN cleanly)
+        // Safe Temperature Parsing
         let incomingTemp = params['k46'] || null;
         if (Array.isArray(incomingTemp)) incomingTemp = incomingTemp[0];
         
@@ -132,17 +134,25 @@ app.get('/live', async (req, res) => {
         let rawTripDistanceMiles = rawDistanceKm * 0.621371;
         if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
 
-// --- PROTECTED TORQUE AUTO-RESET GUARD ---
-        // Only evaluate reset if incoming miles are > 0 (filters out OBD disconnect/zero drops)
+        // --- 1. GPS / OBD SPIKE FILTER ---
+        if (lastKnownRawMiles > 0 && rawTripDistanceMiles > (lastKnownRawMiles + 0.5)) {
+            console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${rawTripDistanceMiles.toFixed(1)} mi`);
+            rawTripDistanceMiles = lastKnownRawMiles;
+        }
+
+        // --- 2. PROTECTED TORQUE AUTO-RESET GUARD ---
         if (rawTripDistanceMiles > 0 && lastKnownRawMiles > 0) {
             if (rawTripDistanceMiles < (lastKnownRawMiles - 0.5)) {
-                savedPreviousTripsMiles += lastKnownRawMiles;
+                if (lastKnownRawMiles < 150.0) {
+                    savedPreviousTripsMiles += lastKnownRawMiles;
+                    console.log(`[Torque Auto-Reset] True reset detected! Saved ${lastKnownRawMiles.toFixed(2)} mi.`);
+                } else {
+                    console.warn(`[Torque Auto-Reset] Ignored reset from glitched baseline: ${lastKnownRawMiles.toFixed(2)} mi.`);
+                }
                 rangeDistanceBaseline = 0.0; 
-                console.log(`[Torque Auto-Reset Guard] True reset detected! Saved ${lastKnownRawMiles.toFixed(2)} mi.`);
             }
         }
 
-        // Only update lastKnownRawMiles on valid positive readings
         if (rawTripDistanceMiles > 0) {
             lastKnownRawMiles = rawTripDistanceMiles;
         }
