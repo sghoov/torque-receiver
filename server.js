@@ -132,16 +132,23 @@ app.get('/live', async (req, res) => {
         let rawTripDistanceMiles = rawDistanceKm * 0.621371;
         if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
 
-        // TORQUE AUTO-RESET DETECTION GUARD
-        if (rawTripDistanceMiles < (lastKnownRawMiles - 0.5) && lastKnownRawMiles > 0) {
-            savedPreviousTripsMiles += lastKnownRawMiles;
-            rangeDistanceBaseline = 0.0; 
-            console.log(`[Torque Auto-Reset Guard] Saved ${lastKnownRawMiles.toFixed(2)} mi before Torque reset!`);
+// --- PROTECTED TORQUE AUTO-RESET GUARD ---
+        // Only evaluate reset if incoming miles are > 0 (filters out OBD disconnect/zero drops)
+        if (rawTripDistanceMiles > 0 && lastKnownRawMiles > 0) {
+            if (rawTripDistanceMiles < (lastKnownRawMiles - 0.5)) {
+                savedPreviousTripsMiles += lastKnownRawMiles;
+                rangeDistanceBaseline = 0.0; 
+                console.log(`[Torque Auto-Reset Guard] True reset detected! Saved ${lastKnownRawMiles.toFixed(2)} mi.`);
+            }
         }
-        lastKnownRawMiles = rawTripDistanceMiles;
 
-        // Cumulative Stream Miles
-        let trueSessionMiles = savedPreviousTripsMiles + rawTripDistanceMiles;
+        // Only update lastKnownRawMiles on valid positive readings
+        if (rawTripDistanceMiles > 0) {
+            lastKnownRawMiles = rawTripDistanceMiles;
+        }
+
+        // Cumulative Stream Miles (Unweighted True Odometer)
+        let trueSessionMiles = savedPreviousTripsMiles + (rawTripDistanceMiles > 0 ? rawTripDistanceMiles : lastKnownRawMiles);
 
         // Store latest raw miles snapshot
         latestRawDistanceMiles = rawTripDistanceMiles;
