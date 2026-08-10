@@ -39,13 +39,30 @@ app.get('/current-city', (req, res) => {
 
 app.get('/update-range', (req, res) => {
     try {
-        if (req.query.reset === 'true') {
+        // 1. FULL SHIFT RESET (New Day / New Stream)
+        if (req.query.fullReset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
             savedPreviousTripsMiles = 0.0;
             lastKnownRawMiles = 0.0;
+            rangeDistanceBaseline = latestRawDistanceMiles;
+
+            io.emit('shift_reset');
+            io.emit('manual_range_update', {
+                startMiles: shortcutStartMiles !== null ? shortcutStartMiles : 0,
+                maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
+            });
+
+            console.log(`[Shift Reset] Full stream shift and range reset executed.`);
+            return res.send(`Success: Full shift clock, session miles, and range reset to 0!`);
+        }
+
+        // 2. MID-STREAM CHARGE RESET (Resets battery bar ONLY, keeps shift timer & odometer running)
+        if (req.query.reset === 'true') {
+            accumulatedTerrainAdjustmentMiles = 0.0;
+            lastKnownAltitudeMeters = null;
             
-            // Lock in current raw miles as the baseline for range calculations
+            // Baseline snapshot for current charge
             rangeDistanceBaseline = latestRawDistanceMiles;
 
             io.emit('manual_range_update', {
@@ -53,8 +70,8 @@ app.get('/update-range', (req, res) => {
                 maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
             });
 
-            console.log(`[Range Reset] Full server reset completed! Baseline: ${rangeDistanceBaseline.toFixed(2)} mi`);
-            return res.send(`Success: Full range and session miles reset to 0.0!`);
+            console.log(`[Battery Charge Reset] Range baseline set to: ${rangeDistanceBaseline.toFixed(2)} mi`);
+            return res.send(`Success: Range bar reset to 70mi! (Shift time & total miles kept intact)`);
         }
 
         let parsedStart = parseFloat(req.query.startMiles);
