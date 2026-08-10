@@ -17,8 +17,9 @@ let shortcutMaxRange = null;
 let lastKnownAltitudeMeters = null;
 let accumulatedTerrainAdjustmentMiles = 0.0; 
 
-// BASELINE SNAPSHOT FOR RANGE RESET
+// BASELINE SNAPSHOTS FOR RESETS
 let rangeDistanceBaseline = 0.0; 
+let sessionMilesBaseline = 0.0;
 let latestRawDistanceMiles = 0.0;
 
 // TORQUE AUTO-RESET GUARD STATE
@@ -46,6 +47,7 @@ app.get('/update-range', (req, res) => {
             savedPreviousTripsMiles = 0.0;
             lastKnownRawMiles = 0.0;
             rangeDistanceBaseline = latestRawDistanceMiles;
+            sessionMilesBaseline = latestRawDistanceMiles;
 
             io.emit('shift_reset');
             io.emit('manual_range_update', {
@@ -95,96 +97,64 @@ app.get('/update-range', (req, res) => {
 
 app.get('/live', async (req, res) => {
     try {
-        // Lowercase all incoming URL query keys to make Torque parameter keys case-insensitive
-        const params = {};
-        for (let key in req.query) {
-            params[key.toLowerCase()] = req.query[key];
-        }
+        // Safe Parameter Parsing Helper (returns null if key is missing/invalid)
+        const getParam = (key) => {
+            let val = req.query[key] || req.query[key.toUpperCase()] || req.query[key.toLowerCase()];
+            if (Array.isArray(val)) val = val[0];
+            if (val === undefined || val === null || val === "" || isNaN(parseFloat(val))) return null;
+            return parseFloat(val);
+        };
 
-        let incomingSpeed = params['kff1001'] || 0;
-        if (Array.isArray(incomingSpeed)) incomingSpeed = incomingSpeed[0];
-        let rawSpeedKmh = parseFloat(incomingSpeed) || 0;
-
-        let incomingDistance = params['kff1204'] || 0;
-        if (Array.isArray(incomingDistance)) incomingDistance = incomingDistance[0];
-        let rawDistanceKm = parseFloat(incomingDistance) || 0;   
-
-        // Safe Temperature Parsing
-        let incomingTemp = params['k46'] || null;
-        if (Array.isArray(incomingTemp)) incomingTemp = incomingTemp[0];
-        
-        let rawAmbientCelsius = null;
-        if (incomingTemp !== null && incomingTemp !== "" && !isNaN(parseFloat(incomingTemp))) {
-            rawAmbientCelsius = parseFloat(incomingTemp);
-        }
-
-        let incomingAltitude = params['kff1010'] || 0;
-        if (Array.isArray(incomingAltitude)) incomingAltitude = incomingAltitude[0];
-        let rawAltitudeMeters = parseFloat(incomingAltitude) || 0; 
-
-        let incomingBearing = params['kff123b'] || null;
-        if (Array.isArray(incomingBearing)) incomingBearing = incomingBearing[0];
-        let rawBearing = (incomingBearing !== null && !isNaN(parseFloat(incomingBearing))) ? parseFloat(incomingBearing) : null;
-
-        let incomingHwyPercent = params['kff1297'] || 0;
-        if (Array.isArray(incomingHwyPercent)) incomingHwyPercent = incomingHwyPercent[0];
-        let hwyPercent = parseFloat(incomingHwyPercent) || 0;
-
-        let incomingTorque = params['kff1225'] || 0;
-        if (Array.isArray(incomingTorque)) incomingTorque = incomingTorque[0];
-        let motorTorque = parseFloat(incomingTorque) || 0;
-
-        // PERSISTENCE FIX
-        let incomingLat = params['kff1006'] || null;
-        if (Array.isArray(incomingLat)) incomingLat = incomingLat[0];
-        let latIn = parseFloat(incomingLat);
-        if (!isNaN(latIn) && latIn !== 0) currentLat = latIn;
-
-        let incomingLon = params['kff1005'] || null;
-        if (Array.isArray(incomingLon)) incomingLon = incomingLon[0];
-        let lonIn = parseFloat(incomingLon);
-        if (!isNaN(lonIn) && lonIn !== 0) currentLon = lonIn;
-
+        let rawSpeedKmh = getParam('kff1001') || 0;
         let speedMph = rawSpeedKmh * 0.621371;
-        if (speedMph < 0.8 || speedMph > 110) speedMph = 0;
-        
-        let rawTripDistanceMiles = rawDistanceKm * 0.621371;
-        if (rawTripDistanceMiles < 0) rawTripDistanceMiles = 0;
+        if (isNaN(speedMph) || speedMph < 0.8 || speedMph > 110) speedMph = 0;
 
-        // --- 1. GPS / OBD SPIKE FILTER ---
-        if (lastKnownRawMiles > 0 && rawTripDistanceMiles > (lastKnownRawMiles + 0.5)) {
-            console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${rawTripDistanceMiles.toFixed(1)} mi`);
-            rawTripDistanceMiles = lastKnownRawMiles;
-        }
+        // --- DISTANCE HANDLING ---
+        let incomingDistanceKm = getParam('kff1204');
+        let rawTripDistanceMiles = lastKnownRawMiles; // Fallback to last known distance if PID is missing from frame
 
-        // --- 2. PROTECTED TORQUE AUTO-RESET GUARD ---
-        if (rawTripDistanceMiles > 0 && lastKnownRawMiles > 0) {
-            if (rawTripDistanceMiles < (lastKnownRawMiles - 0.5)) {
-                if (lastKnownRawMiles < 150.0) {
-                    savedPreviousTripsMiles += lastKnownRawMiles;
-                    console.log(`[Torque Auto-Reset] True reset detected! Saved ${lastKnownRawMiles.toFixed(2)} mi.`);
-                } else {
-                    console.warn(`[Torque Auto-Reset] Ignored reset from glitched baseline: ${lastKnownRawMiles.toFixed(2)} mi.`);
+        if (incomingDistanceKm !== null) {
+            let parsedMiles = incomingDistanceKm * 0.621371;
+            if (!isNaN(parsedMiles) && parsedMiles >= 0) {
+                
+                // 1. GPS Tunnel / Teleport Spike Filter (Ignores jumps > 10 miles in a single tick)
+                if (lastKnownRawMiles > 0 && parsedMiles > (lastKnownRawMiles + 10.0)) {
+                    console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${parsedMiles.toFixed(1)} mi`);
+                    rawTripDistanceMiles = lastKnownRawMiles;
+                } 
+                // 2. Torque Auto-Reset Guard (Handles manual trip resets in Torque app)
+                else if (lastKnownRawMiles > 0 && parsedMiles < (lastKnownRawMiles - 1.0)) {
+                    if (lastKnownRawMiles < 200.0) {
+                        savedPreviousTripsMiles += Math.max(0, lastKnownRawMiles - sessionMilesBaseline);
+                        sessionMilesBaseline = 0.0;
+                        console.log(`[Torque Auto-Reset] True reset detected! Saved ${lastKnownRawMiles.toFixed(2)} mi.`);
+                    }
+                    rangeDistanceBaseline = 0.0;
+                    rawTripDistanceMiles = parsedMiles;
+                    lastKnownRawMiles = parsedMiles;
+                } 
+                else {
+                    rawTripDistanceMiles = parsedMiles;
+                    lastKnownRawMiles = parsedMiles;
                 }
-                rangeDistanceBaseline = 0.0; 
             }
         }
 
-        if (rawTripDistanceMiles > 0) {
-            lastKnownRawMiles = rawTripDistanceMiles;
-        }
-
-        // Cumulative Stream Miles (Unweighted True Odometer)
-        let trueSessionMiles = savedPreviousTripsMiles + (rawTripDistanceMiles > 0 ? rawTripDistanceMiles : lastKnownRawMiles);
-
-        // Store latest raw miles snapshot
         latestRawDistanceMiles = rawTripDistanceMiles;
 
-        // Distance driven on current charge
+        // Stream Session Odometer
+        let currentUnweightedMiles = Math.max(0, rawTripDistanceMiles - sessionMilesBaseline);
+        let trueSessionMiles = savedPreviousTripsMiles + currentUnweightedMiles;
+        if (isNaN(trueSessionMiles)) trueSessionMiles = 0.0;
+
+        // Distance on Current Battery Charge
         let milesOnCurrentCharge = Math.max(0, rawTripDistanceMiles - rangeDistanceBaseline);
         let taxSaved = trueSessionMiles * MILEAGE_RATE;
 
         // --- CALIBRATED RANGE MULTIPLIERS ---
+        let hwyPercent = getParam('kff1297') || 0;
+        let motorTorque = getParam('kff1225') || 0;
+
         let speedPenalty = 0.0;
         if (speedMph > 53) {
             speedPenalty = Math.min(0.18, ((speedMph - 53) / 17) * 0.18); 
@@ -194,45 +164,58 @@ app.get('/live', async (req, res) => {
 
         let baseWeightedMiles = (milesOnCurrentCharge * styleMultiplier) * 1.05;
 
-        if (speedMph > 2) {
-            if (lastKnownAltitudeMeters !== null) {
+        // --- ALTITUDE & HILL CLIMB CALCULATIONS ---
+        let rawAltitudeMeters = getParam('kff1010');
+        
+        // ONLY calculate hill climb if PID kff1010 was explicitly provided in this packet
+        if (speedMph > 2 && rawAltitudeMeters !== null) {
+            if (lastKnownAltitudeMeters !== null && !isNaN(lastKnownAltitudeMeters)) {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
-                if (deltaFeet > 2.0) { 
-                    let climbWeight = deltaFeet * 0.006; 
+                
+                // Real climbs between 3 ft and 120 ft per frame
+                if (deltaFeet > 3.0 && deltaFeet < 120.0) { 
+                    let climbWeight = deltaFeet * 0.005; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
-            lastKnownAltitudeMeters = rawAltitudeMeters;
+            lastKnownAltitudeMeters = rawAltitudeMeters; // Update altitude baseline
 
             if (motorTorque <= 0) {
-                let regenCreditPerSecond = (speedMph / 3600) * 0.25; 
+                let regenCreditPerSecond = (speedMph / 3600) * 0.20; 
                 accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
             }
-        } else {
-            lastKnownAltitudeMeters = rawAltitudeMeters;
         }
 
         let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
-        if (adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
+        if (isNaN(adjustedTripDistanceMiles) || adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
 
+        // --- OTHER SENSOR PARSING ---
+        let rawAmbientCelsius = getParam('k46');
         let tempFahrenheit = "--°F";
         if (rawAmbientCelsius !== null) {
             tempFahrenheit = (Math.round((rawAmbientCelsius * 9/5) + 32) + 1) + "°F";
         }
 
         let elevationDisplay = "-- ft";
-        if (params['kff1010']) {
+        if (rawAltitudeMeters !== null) {
             let trueFeet = (rawAltitudeMeters * 3.28084) + 104; 
             elevationDisplay = Math.round(trueFeet) + " ft";
         }
 
+        let rawBearing = getParam('kff123b');
         let compassHeading = "--";
-        if (rawBearing !== null && !isNaN(rawBearing)) {
+        if (rawBearing !== null) {
             const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
             let index = Math.round(((rawBearing % 360) / 45)) % 8;
             compassHeading = directions[index];
         }
+
+        let latIn = getParam('kff1006');
+        if (latIn !== null && latIn !== 0) currentLat = latIn;
+
+        let lonIn = getParam('kff1005');
+        if (lonIn !== null && lonIn !== 0) currentLon = lonIn;
 
         const telemetryData = {
             distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
