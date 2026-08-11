@@ -22,6 +22,9 @@ let rangeDistanceBaseline = 0.0;
 let sessionMilesBaseline = 0.0;
 let latestRawDistanceMiles = 0.0;
 
+// SHIFT TIMER STATE (SERVER-SIDE)
+let shiftStartTime = null;
+
 // TORQUE AUTO-RESET GUARD STATE
 let savedPreviousTripsMiles = 0.0;
 let lastKnownRawMiles = 0.0;
@@ -46,6 +49,7 @@ app.get('/update-range', (req, res) => {
             lastKnownAltitudeMeters = null;
             savedPreviousTripsMiles = 0.0;
             lastKnownRawMiles = 0.0;
+            shiftStartTime = null; // Resets shift timer back to 0:00
             rangeDistanceBaseline = latestRawDistanceMiles;
             sessionMilesBaseline = latestRawDistanceMiles;
 
@@ -108,6 +112,14 @@ app.get('/live', async (req, res) => {
         let rawSpeedKmh = getParam('kff1001') || 0;
         let speedMph = rawSpeedKmh * 0.621371;
         if (isNaN(speedMph) || speedMph < 0.8 || speedMph > 110) speedMph = 0;
+
+        // --- SERVER-SIDE SHIFT TIMER TRIGGER ---
+        if (speedMph > 1.0 && shiftStartTime === null) {
+            shiftStartTime = Date.now();
+            console.log(`[Shift Timer] Started shift timer at ${new Date(shiftStartTime).toLocaleTimeString()}`);
+        }
+
+        let shiftDurationSeconds = shiftStartTime ? Math.floor((Date.now() - shiftStartTime) / 1000) : 0;
 
         // --- DISTANCE HANDLING ---
         let incomingDistanceKm = getParam('kff1204');
@@ -227,6 +239,7 @@ app.get('/live', async (req, res) => {
             lon: currentLon,
             tripMilesRaw: adjustedTripDistanceMiles,           // Drives Range Slider
             actualSessionMilesRaw: trueSessionMiles,            // Drives Stream Odometer
+            shiftSeconds: shiftDurationSeconds,                 // Drives Stream Timer
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
