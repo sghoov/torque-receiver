@@ -59,7 +59,7 @@ app.get('/update-range', (req, res) => {
                 maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
             });
 
-            console.log(`[Shift Reset] Full stream shift and range reset executed.`);
+            console.log(`[Shift Reset] Full stream shift clock, miles, and range reset executed.`);
             return res.send(`Success: Full shift clock, session miles, and range reset to 0!`);
         }
 
@@ -123,32 +123,34 @@ app.get('/live', async (req, res) => {
 
         // --- DISTANCE HANDLING ---
         let incomingDistanceKm = getParam('kff1204');
-        let rawTripDistanceMiles = lastKnownRawMiles; // Fallback to last known distance if PID is missing from frame
+        let rawTripDistanceMiles = lastKnownRawMiles; // Default to last known value if PID is missing
 
         if (incomingDistanceKm !== null) {
             let parsedMiles = incomingDistanceKm * 0.621371;
-            if (!isNaN(parsedMiles) && parsedMiles >= 0) {
+            
+            // Ignore corrupted zero or near-zero drops from Bluetooth OBD disconnects
+            if (!isNaN(parsedMiles) && parsedMiles > 0.01) {
                 
-                // 1. GPS Tunnel / Teleport Spike Filter (Ignores jumps > 10 miles in a single tick)
-                if (lastKnownRawMiles > 0 && parsedMiles > (lastKnownRawMiles + 10.0)) {
+                // 1. GPS Tunnel / Teleport Spike Filter (> 5.0 miles in a single tick)
+                if (lastKnownRawMiles > 0 && parsedMiles > (lastKnownRawMiles + 5.0)) {
                     console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${parsedMiles.toFixed(1)} mi`);
                     rawTripDistanceMiles = lastKnownRawMiles;
                 } 
-                // 2. Torque Auto-Reset Guard (Handles manual trip resets in Torque app)
-                else if (lastKnownRawMiles > 0 && parsedMiles < (lastKnownRawMiles - 1.0)) {
-                    if (lastKnownRawMiles < 200.0) {
-                        savedPreviousTripsMiles += Math.max(0, lastKnownRawMiles - sessionMilesBaseline);
-                        sessionMilesBaseline = 0.0;
-                        console.log(`[Torque Auto-Reset] True reset detected! Saved ${lastKnownRawMiles.toFixed(2)} mi.`);
-                    }
+                // 2. TRUE TORQUE APP RESET GUARD: Only save baseline if reading drops close to zero (< 0.5 mi)
+                else if (lastKnownRawMiles > 1.0 && parsedMiles < 0.5) {
+                    savedPreviousTripsMiles += Math.max(0, lastKnownRawMiles - sessionMilesBaseline);
+                    sessionMilesBaseline = 0.0;
                     rangeDistanceBaseline = 0.0;
                     rawTripDistanceMiles = parsedMiles;
                     lastKnownRawMiles = parsedMiles;
+                    console.log(`[Torque Auto-Reset] Valid reset confirmed at ${parsedMiles.toFixed(2)} mi.`);
                 } 
-                else {
+                // 3. NORMAL ODOMETER ADVANCEMENT
+                else if (parsedMiles >= lastKnownRawMiles) {
                     rawTripDistanceMiles = parsedMiles;
                     lastKnownRawMiles = parsedMiles;
                 }
+                // Dips below lastKnownRawMiles that are not near zero are ignored (held at lastKnownRawMiles)
             }
         }
 
