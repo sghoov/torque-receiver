@@ -51,7 +51,7 @@ async function processOfferCard() {
     // Initialize Dropbox client using token from Render environment variables
     const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
 
-    console.log('Fetching /Offercard.png from Dropbox...');
+    console.log('Fetching /offercard.png from Dropbox...');
     
     // 1. Download Offercard.png from Dropbox
     const dbxResponse = await dbx.filesDownload({ path: '/Offercard.png' });
