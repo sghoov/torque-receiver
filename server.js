@@ -75,8 +75,8 @@ async function processOfferCard() {
 
     console.log('Sending image to Gemini via REST...');
 
-    // 2. Call Gemini API via v1beta endpoint
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+    // 2. Call Gemini 3.8 Flash API
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
       method: 'POST',
