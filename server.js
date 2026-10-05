@@ -48,7 +48,6 @@ let currentLon = -122.4868;
 // ==========================================
 async function processOfferCard() {
   try {
-    // Initialize Dropbox client using token from Render environment variables
     const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
 
     console.log('Fetching /offercard.png from Dropbox...');
@@ -57,36 +56,40 @@ async function processOfferCard() {
     const dbxResponse = await dbx.filesDownload({ path: '/offercard.png' });
     const imageBuffer = dbxResponse.result.fileBinary;
 
-    // 2. Send image buffer to Gemini 1.5 Flash
+    const base64Data = imageBuffer.toString('base64');
+
+    // 2. Initialize Gemini 1.5 Flash
     console.log('Sending image to Gemini 1.5 Flash...');
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
-    
-    const imagePart = {
-      inlineData: {
-        data: imageBuffer.toString('base64'),
-        mimeType: 'image/png'
-      }
-    };
 
     const prompt = `You are an assistant for a delivery driver live stream.
-       Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
-       Extract:
-       1. Main offer payout price (e.g. 15.20)
-       2. Total trip distance in miles (e.g. 6.2)
+Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
+Extract:
+1. Main offer payout price (e.g. 15.20)
+2. Total trip distance in miles (e.g. 6.2)
 
-       Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
-       Return ONLY raw JSON in this format:
-       {"price": 15.20, "miles": 6.2}`;
+Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
+Return ONLY raw JSON in this format:
+{"price": 15.20, "miles": 6.2}`;
 
-    const response = await model.generateContent([prompt, imagePart]);
+    const result = await model.generateContent([
+      prompt,
+      {
+        inlineData: {
+          data: base64Data,
+          mimeType: 'image/png'
+        }
+      }
+    ]);
 
-    // 3. Clean and parse JSON response
-    const responseText = response.response.text();
+    const response = await result.response;
+    const responseText = response.text();
+    
     const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
     const data = JSON.parse(cleanJson);
     console.log(`Parsed Values -> Price: $${data.price} | Miles: ${data.miles} mi`);
 
-    // 4. Fetch current total from /total.txt (default to 0 if file doesn't exist yet)
+    // 3. Fetch current total from /total.txt
     let currentTotal = 0;
     try {
       const totalFile = await dbx.filesDownload({ path: '/total.txt' });
@@ -95,7 +98,7 @@ async function processOfferCard() {
       console.log('total.txt not found or empty, starting at 0.');
     }
 
-    // 5. Compute new total and write updated files back to Dropbox
+    // 4. Compute new total and write back to Dropbox
     const newTotal = (currentTotal + parseFloat(data.price)).toFixed(2);
 
     await dbx.filesUpload({
