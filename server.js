@@ -8,6 +8,16 @@ const io = require('socket.io')(http, {
     }
 });
 
+// AI & Dropbox SDK Imports
+const { GoogleGenAI } = require('@google/genai');
+const { Dropbox } = require('dropbox');
+
+// Enable JSON body parsing for API endpoints
+app.use(express.json());
+
+// Initialize Gemini SDK
+const ai = new GoogleGenAI();
+
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
 // PERSISTENT SERVER STATE STORAGE
@@ -33,8 +43,97 @@ let lastKnownRawMiles = 0.0;
 let currentLat = 37.6017; 
 let currentLon = -122.4868;
 
+// ==========================================
+// AI VISION OFFER CARD PROCESSOR (GEMINI)
+// ==========================================
+async function processOfferCard() {
+  try {
+    // Initialize Dropbox client using token from Render environment variables
+    const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
+
+    console.log('Fetching /Offercard.png from Dropbox...');
+    
+    // 1. Download Offercard.png from Dropbox
+    const dbxResponse = await dbx.filesDownload({ path: '/Offercard.png' });
+    const imageBuffer = dbxResponse.result.fileBinary;
+
+    // 2. Send image buffer to Gemini 2.5 Flash
+    console.log('Sending image to Gemini 2.5 Flash...');
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: [
+        {
+          inlineData: {
+            mimeType: 'image/png',
+            data: imageBuffer.toString('base64')
+          }
+        },
+        `You are an assistant for a delivery driver live stream.
+         Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
+         Extract:
+         1. Main offer payout price (e.g. 15.20)
+         2. Total trip distance in miles (e.g. 6.2)
+
+         Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
+         Return ONLY raw JSON in this format:
+         {"price": 15.20, "miles": 6.2}`
+      ]
+    });
+
+    // 3. Clean and parse JSON response
+    const cleanJson = response.text.replace(/```json|```/g, '').trim();
+    const data = JSON.parse(cleanJson);
+    console.log(`Parsed Values -> Price: $${data.price} | Miles: ${data.miles} mi`);
+
+    // 4. Fetch current total from /total.txt (default to 0 if file doesn't exist yet)
+    let currentTotal = 0;
+    try {
+      const totalFile = await dbx.filesDownload({ path: '/total.txt' });
+      currentTotal = parseFloat(totalFile.result.fileBinary.toString('utf-8')) || 0;
+    } catch (e) {
+      console.log('total.txt not found or empty, starting at 0.');
+    }
+
+    // 5. Compute new total and write updated files back to Dropbox
+    const newTotal = (currentTotal + parseFloat(data.price)).toFixed(2);
+
+    await dbx.filesUpload({
+      path: '/total.txt',
+      contents: newTotal,
+      mode: { '.tag': 'overwrite' }
+    });
+
+    await dbx.filesUpload({
+      path: '/offer_miles.txt',
+      contents: data.miles.toString(),
+      mode: { '.tag': 'overwrite' }
+    });
+
+    console.log(`Updated Dropbox files! New Total: $${newTotal}`);
+    return { success: true, price: data.price, miles: data.miles, total: newTotal };
+
+  } catch (err) {
+    console.error('Error processing offer card:', err);
+    throw err;
+  }
+}
+
+// ==========================================
+// ROUTES
+// ==========================================
+
 app.get('/', (req, res) => {
-    res.send('Telemetry physics engine server is up and running safely!');
+    res.send('Telemetry physics engine & AI Vision server is up and running safely!');
+});
+
+// Route to trigger AI processing of offercard.png
+app.post('/process-card', async (req, res) => {
+  try {
+    const result = await processOfferCard();
+    res.json({ status: 'success', data: result });
+  } catch (error) {
+    res.status(500).json({ status: 'error', message: error.message });
+  }
 });
 
 app.get('/current-city', (req, res) => {
