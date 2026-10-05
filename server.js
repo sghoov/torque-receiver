@@ -1,17 +1,16 @@
 const express = require('express');
 const { Dropbox } = require('dropbox');
-const { GoogleGenAI } = require('@google/genai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
-app.use(express.json({ limit: '20mb' })); // Support base64 image uploads up to 20MB
+app.use(express.json({ limit: '20mb' }));
 
-// Initialize Dropbox Client
+// Initialize Dropbox
 const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
 
-// Initialize Gemini AI Client
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// Initialize Gemini SDK using @google/generative-ai
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// Helper to upload text/JSON files to Dropbox
 async function uploadToDropbox(filename, content) {
   return dbx.filesUpload({
     path: '/' + filename,
@@ -21,7 +20,7 @@ async function uploadToDropbox(filename, content) {
 }
 
 // =========================================================================
-// ROUTE 1: /parse-offer (AI Screenshot Analyzer for Offer Cards)
+// ROUTE 1: /parse-offer (AI Screenshot Analyzer)
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
   try {
@@ -30,40 +29,42 @@ app.post('/parse-offer', async (req, res) => {
       return res.status(400).json({ error: 'No image provided in imageBase64 field' });
     }
 
-    // Clean up base64 string if data URI header is included
     const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
 
-    // Analyze screenshot using Gemini Vision
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: [
-        {
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: cleanBase64
-          }
-        },
-        `Analyze this gig delivery offer card screenshot from one of these platforms: 
-         DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
+    // Select Gemini 1.5 Flash Vision Model
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-         Extract the following details and return ONLY a valid JSON object with no markdown formatting:
-         {
-           "app_name": "DoorDash | Uber Eats | Instacart | Amazon Flex | Shipt | Roadie",
-           "merchant": "Store or Restaurant Name",
-           "pay": 0.00,
-           "miles": 0.0,
-           "tip": 0.00
-         }
+    const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
+DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
 
-         Rules:
-         1. "pay" is the total earnings payout shown on the offer card.
-         2. "tip" is the explicit tip amount if broken down on the card (e.g., Instacart tip line item). If no tip is broken down separately, set "tip" to 0.00.
-         3. "merchant" is the pickup store/restaurant (e.g., "Costco", "McDonald's", "Safeway", "Amazon DSH1"). If unknown, set to "DELIVERY OFFER".`
-      ]
-    });
+Extract the following details and return ONLY a valid JSON object with no markdown formatting:
+{
+  "app_name": "DoorDash | Uber Eats | Instacart | Amazon Flex | Shipt | Roadie",
+  "merchant": "Store or Restaurant Name",
+  "pay": 0.00,
+  "miles": 0.0,
+  "tip": 0.00
+}
 
-    // Strip markdown code blocks if present
-    const rawText = response.text.replace(/```json|```/g, '').trim();
+Rules:
+1. "pay" is the total earnings payout shown on the offer card.
+2. "tip" is the explicit tip amount if broken down on the card (e.g., Instacart tip line item). If no tip is broken down separately, set "tip" to 0.00.
+3. "merchant" is the pickup store/restaurant (e.g., "Costco", "McDonald's", "Safeway", "Amazon DSH1"). If unknown, set to "DELIVERY OFFER".`;
+
+    const imageParts = [
+      {
+        inlineData: {
+          data: cleanBase64,
+          mimeType: 'image/jpeg'
+        }
+      }
+    ];
+
+    const result = await model.generateContent([prompt, ...imageParts]);
+    const responseText = result.response.text();
+
+    // Strip markdown code blocks
+    const rawText = responseText.replace(/```json|```/g, '').trim();
     const parsedData = JSON.parse(rawText);
 
     const appName = parsedData.app_name || 'Gig Offer';
@@ -72,14 +73,12 @@ app.post('/parse-offer', async (req, res) => {
     const miles = parseFloat(parsedData.miles || 0).toFixed(1);
     const tip = parseFloat(parsedData.tip || 0);
 
-    // Queue standard files for Dropbox upload
     const uploadPromises = [
       uploadToDropbox('merchant_name.txt', merchant),
       uploadToDropbox('current_offer.txt', `$${pay}`),
       uploadToDropbox('offer_miles.txt', miles)
     ];
 
-    // If an upfront tip was identified on the offer card (e.g., Instacart)
     if (tip > 0) {
       let currentStats = { app_tips: "0.00", stream_tips: "0.00", grand_total: "0.00" };
       try {
@@ -104,7 +103,6 @@ app.post('/parse-offer', async (req, res) => {
       console.log(`[Tip Ingested] +$${tip.toFixed(2)} from ${appName} (${merchant}) | New Total Tips: $${updatedAppTips}`);
     }
 
-    // Execute all uploads in parallel
     await Promise.all(uploadPromises);
 
     console.log(`[AI Offer Parsed] App: ${appName} | Store: ${merchant} | Pay: $${pay} | Miles: ${miles} | Tip: $${tip.toFixed(2)}`);
@@ -120,9 +118,8 @@ app.post('/parse-offer', async (req, res) => {
   }
 });
 
-
 // =========================================================================
-// ROUTE 2: /add-tip (Manual / Shortcut Tip Receiver)
+// ROUTE 2: /add-tip
 // =========================================================================
 app.post('/add-tip', async (req, res) => {
   try {
@@ -172,10 +169,6 @@ app.post('/add-tip', async (req, res) => {
   }
 });
 
-
-// =========================================================================
-// HEALTH CHECK & SERVER LISTEN
-// =========================================================================
 app.get('/', (req, res) => {
   res.send('Torque Receiver API is Live');
 });
