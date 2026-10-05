@@ -71,7 +71,7 @@ async function uploadToDropbox(dbxToken, filePath, contentString) {
   }
 }
 
-// Helper to get or initialize shift stats structure
+// Helper to get default shift stats structure
 function getDefaultStats() {
   return {
     totals: {
@@ -198,7 +198,13 @@ async function processOfferCard(isSubtractMode = false) {
     let stats = getDefaultStats();
     const existingStatsText = await downloadFromDropbox(dbxToken, '/shift_stats.json');
     if (existingStatsText) {
-      try { stats = Object.assign(getDefaultStats(), JSON.parse(existingStatsText)); } catch (e) {}
+      try {
+        const parsed = JSON.parse(existingStatsText);
+        stats.totals = Object.assign(stats.totals, parsed.totals || {});
+        stats.apps = Object.assign(stats.apps, parsed.apps || {});
+        stats.stream_tips = Object.assign(stats.stream_tips, parsed.stream_tips || {});
+        stats.history = parsed.history || [];
+      } catch (e) {}
     }
 
     const activeAppKey = normalizeAppKey(data.app_name);
@@ -287,7 +293,15 @@ async function undoLastOffer() {
   const existingStatsText = await downloadFromDropbox(dbxToken, '/shift_stats.json');
   if (!existingStatsText) throw new Error('No shift stats found on Dropbox.');
 
-  let stats = Object.assign(getDefaultStats(), JSON.parse(existingStatsText));
+  let stats = getDefaultStats();
+  try {
+    const parsed = JSON.parse(existingStatsText);
+    stats.totals = Object.assign(stats.totals, parsed.totals || {});
+    stats.apps = Object.assign(stats.apps, parsed.apps || {});
+    stats.stream_tips = Object.assign(stats.stream_tips, parsed.stream_tips || {});
+    stats.history = parsed.history || [];
+  } catch (e) {}
+
   if (!stats.history || stats.history.length === 0) {
     throw new Error('No offer history available to undo.');
   }
@@ -361,18 +375,30 @@ app.post('/add-tip', async (req, res) => {
     let stats = getDefaultStats();
     const existingStatsText = await downloadFromDropbox(dbxToken, '/shift_stats.json');
     if (existingStatsText) {
-      try { stats = Object.assign(getDefaultStats(), JSON.parse(existingStatsText)); } catch (e) {}
+      try {
+        const parsed = JSON.parse(existingStatsText);
+        stats.totals = Object.assign(stats.totals, parsed.totals || {});
+        stats.apps = Object.assign(stats.apps, parsed.apps || {});
+        stats.stream_tips = Object.assign(stats.stream_tips, parsed.stream_tips || {});
+        stats.history = parsed.history || [];
+      } catch (e) {
+        console.warn('Failed to parse existing shift_stats.json:', e.message);
+      }
     }
 
     // 1. App-Specific Tip Breakout (DoorDash, Uber Eats, Grubhub)
     if (app_name) {
       const activeAppKey = normalizeAppKey(app_name);
-      stats.apps[activeAppKey].tips += tipValue;
-      stats.apps[activeAppKey].total += tipValue;
-      stats.totals.delivery_tips += tipValue;
-      stats.totals.grand_total += tipValue;
+      
+      if (!stats.apps[activeAppKey]) {
+        stats.apps[activeAppKey] = { base: 0, tips: 0, total: 0, miles: 0, deliveries: 0 };
+      }
 
-      // Update app tip txt file on Dropbox
+      stats.apps[activeAppKey].tips = (parseFloat(stats.apps[activeAppKey].tips) || 0) + tipValue;
+      stats.apps[activeAppKey].total = (parseFloat(stats.apps[activeAppKey].total) || 0) + tipValue;
+      stats.totals.delivery_tips = (parseFloat(stats.totals.delivery_tips) || 0) + tipValue;
+      stats.totals.grand_total = (parseFloat(stats.totals.grand_total) || 0) + tipValue;
+
       await uploadToDropbox(dbxToken, `/${activeAppKey}_tips.txt`, stats.apps[activeAppKey].tips.toFixed(2));
       await uploadToDropbox(dbxToken, `/${activeAppKey}_total.txt`, stats.apps[activeAppKey].total.toFixed(2));
     }
@@ -380,13 +406,13 @@ app.post('/add-tip', async (req, res) => {
     else if (type) {
       const tipType = type.toLowerCase();
       if (stats.stream_tips[tipType] !== undefined) {
-        stats.stream_tips[tipType] += tipValue;
+        stats.stream_tips[tipType] = (parseFloat(stats.stream_tips[tipType]) || 0) + tipValue;
       } else {
-        stats.stream_tips.cash += tipValue;
+        stats.stream_tips.cash = (parseFloat(stats.stream_tips.cash) || 0) + tipValue;
       }
-      stats.stream_tips.total += tipValue;
-      stats.totals.stream_tips += tipValue;
-      stats.totals.grand_total += tipValue;
+      stats.stream_tips.total = (parseFloat(stats.stream_tips.total) || 0) + tipValue;
+      stats.totals.stream_tips = (parseFloat(stats.totals.stream_tips) || 0) + tipValue;
+      stats.totals.grand_total = (parseFloat(stats.totals.grand_total) || 0) + tipValue;
 
       await uploadToDropbox(dbxToken, '/stream_tips.txt', stats.stream_tips.total.toFixed(2));
     }
@@ -394,10 +420,12 @@ app.post('/add-tip', async (req, res) => {
     await uploadToDropbox(dbxToken, '/shift_stats.json', JSON.stringify(stats, null, 2));
     await uploadToDropbox(dbxToken, '/total.txt', stats.totals.grand_total.toFixed(2));
 
+    const currentAppKey = app_name ? normalizeAppKey(app_name) : null;
+
     res.json({
       status: 'success',
       data: {
-        app_tips: app_name ? stats.apps[normalizeAppKey(app_name)].tips.toFixed(2) : undefined,
+        app_tips: currentAppKey ? stats.apps[currentAppKey].tips.toFixed(2) : undefined,
         stream_tips: stats.stream_tips.total.toFixed(2),
         grand_total: stats.totals.grand_total.toFixed(2)
       }
