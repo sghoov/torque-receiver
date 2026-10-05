@@ -16,7 +16,11 @@ const { Dropbox } = require('dropbox');
 app.use(express.json());
 
 // Initialize Gemini SDK with API key from Render Environment
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+const apiKey = process.env.GEMINI_API_KEY;
+if (!apiKey) {
+    console.warn("WARNING: GEMINI_API_KEY environment variable is not defined!");
+}
+const genAI = new GoogleGenerativeAI(apiKey || '');
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
@@ -48,15 +52,24 @@ let currentLon = -122.4868;
 // ==========================================
 async function processOfferCard() {
   try {
+    if (!process.env.GEMINI_API_KEY) {
+      throw new Error('GEMINI_API_KEY environment variable is missing on Render');
+    }
+    if (!process.env.DROPBOX_ACCESS_TOKEN) {
+      throw new Error('DROPBOX_ACCESS_TOKEN environment variable is missing on Render');
+    }
+
     const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
 
     console.log('Fetching /offercard.png from Dropbox...');
     
     // 1. Download offercard.png from Dropbox
     const dbxResponse = await dbx.filesDownload({ path: '/offercard.png' });
-    const imageBuffer = dbxResponse.result.fileBinary;
-
-    const base64Data = imageBuffer.toString('base64');
+    
+    // Ensure fileBinary is safely converted to Buffer -> base64
+    const fileBinary = dbxResponse.result.fileBinary;
+    const buffer = Buffer.isBuffer(fileBinary) ? fileBinary : Buffer.from(fileBinary);
+    const base64Data = buffer.toString('base64');
 
     // 2. Initialize Gemini 1.5 Flash
     console.log('Sending image to Gemini 1.5 Flash...');
@@ -93,7 +106,10 @@ Return ONLY raw JSON in this format:
     let currentTotal = 0;
     try {
       const totalFile = await dbx.filesDownload({ path: '/total.txt' });
-      currentTotal = parseFloat(totalFile.result.fileBinary.toString('utf-8')) || 0;
+      const totalBuf = Buffer.isBuffer(totalFile.result.fileBinary) 
+        ? totalFile.result.fileBinary 
+        : Buffer.from(totalFile.result.fileBinary);
+      currentTotal = parseFloat(totalBuf.toString('utf-8')) || 0;
     } catch (e) {
       console.log('total.txt not found or empty, starting at 0.');
     }
@@ -117,7 +133,7 @@ Return ONLY raw JSON in this format:
     return { success: true, price: data.price, miles: data.miles, total: newTotal };
 
   } catch (err) {
-    console.error('Error processing offer card:', err);
+    console.error('Error processing offer card detail:', err);
     throw new Error(err.message || 'Processing failed');
   }
 }
@@ -136,7 +152,8 @@ app.post('/process-card', async (req, res) => {
     const result = await processOfferCard();
     res.json({ status: 'success', data: result });
   } catch (error) {
-    res.status(500).json({ status: 'error', message: error.message });
+    console.error('API /process-card failed:', error);
+    res.status(500).json({ status: 'error', message: error.message || error.toString() });
   }
 });
 
