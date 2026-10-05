@@ -47,108 +47,65 @@ async function processOfferCard() {
     const apiKey = process.env.GEMINI_API_KEY;
     const dbxToken = process.env.DROPBOX_ACCESS_TOKEN;
 
-    if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is missing on Render');
-    if (!dbxToken) throw new Error('DROPBOX_ACCESS_TOKEN environment variable is missing on Render');
+    if (!apiKey) throw new Error('GEMINI_API_KEY missing on Render');
+    if (!dbxToken) throw new Error('DROPBOX_ACCESS_TOKEN missing on Render');
 
     const dbx = new Dropbox({ accessToken: dbxToken });
-
     console.log('Fetching /offercard.png from Dropbox...');
     
-    // 1. Download offercard.png from Dropbox
+    // Download image from Dropbox
     const dbxResponse = await dbx.filesDownload({ path: '/offercard.png' });
-    
-    // Safe binary buffer conversion
     const fileBinary = dbxResponse.result.fileBinary;
     const buffer = Buffer.isBuffer(fileBinary) ? fileBinary : Buffer.from(fileBinary);
     const base64Data = buffer.toString('base64');
 
-    // Detect JPEG vs PNG header
     let mimeType = 'image/png';
     if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
       mimeType = 'image/jpeg';
-      console.log('Detected JPEG header in offercard file.');
     }
 
-    console.log('Sending image directly to Gemini 1.5 Flash via REST...');
+    console.log('Sending image to Gemini via REST...');
 
-    // 2. Direct REST call to Gemini 1.5 Flash API
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
 
-    const payload = {
-      contents: [
-        {
-          parts: [
-            {
-              inlineData: {
-                mimeType: mimeType,
-                data: base64Data
-              }
-            },
-            {
-              text: `You are an assistant for a delivery driver live stream.
-Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
-Extract:
-1. Main offer payout price (e.g. 15.20)
-2. Total trip distance in miles (e.g. 6.2)
-
-Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
-Return ONLY raw JSON in this format:
-{"price": 15.20, "miles": 6.2}`
-            }
-          ]
-        }
-      ]
-    };
-
-    const apiRes = await fetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { inlineData: { mimeType: mimeType, data: base64Data } },
+            { text: `Extract offer payout price and total miles in raw JSON format: {"price": 15.20, "miles": 6.2}` }
+          ]
+        }]
+      })
     });
 
-    const apiData = await apiRes.json();
+    const resData = await response.json();
 
-    if (!apiRes.ok) {
-      console.error('Gemini API Error Body:', JSON.stringify(apiData));
-      throw new Error(`Gemini API Error [HTTP ${apiRes.status}]: ${apiData.error?.message || 'Unknown error'}`);
+    if (!response.ok) {
+      console.error('GOOGLE_RAW_ERROR:', JSON.stringify(resData));
+      throw new Error(`Google Error [${response.status}]: ${resData.error?.message || 'Bad Request'}`);
     }
 
-    const responseText = apiData.candidates[0].content.parts[0].text;
+    const responseText = resData.candidates[0].content.parts[0].text;
     const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
     const data = JSON.parse(cleanJson);
 
-    console.log(`Parsed Values -> Price: $${data.price} | Miles: ${data.miles} mi`);
-
-    // 3. Fetch current total from /total.txt
+    // Save outputs back to Dropbox
     let currentTotal = 0;
     try {
       const totalFile = await dbx.filesDownload({ path: '/total.txt' });
-      const totalBuf = Buffer.isBuffer(totalFile.result.fileBinary) 
-        ? totalFile.result.fileBinary 
-        : Buffer.from(totalFile.result.fileBinary);
+      const totalBuf = Buffer.isBuffer(totalFile.result.fileBinary) ? totalFile.result.fileBinary : Buffer.from(totalFile.result.fileBinary);
       currentTotal = parseFloat(totalBuf.toString('utf-8')) || 0;
-    } catch (e) {
-      console.log('total.txt not found or empty, starting at 0.');
-    }
+    } catch (e) {}
 
-    // 4. Compute new total and write back to Dropbox
     const newTotal = (currentTotal + parseFloat(data.price)).toFixed(2);
 
-    await dbx.filesUpload({
-      path: '/total.txt',
-      contents: newTotal,
-      mode: { '.tag': 'overwrite' }
-    });
+    await dbx.filesUpload({ path: '/total.txt', contents: newTotal, mode: { '.tag': 'overwrite' } });
+    await dbx.filesUpload({ path: '/offer_miles.txt', contents: data.miles.toString(), mode: { '.tag': 'overwrite' } });
 
-    await dbx.filesUpload({
-      path: '/offer_miles.txt',
-      contents: data.miles.toString(),
-      mode: { '.tag': 'overwrite' }
-    });
-
-    console.log(`Updated Dropbox files! New Total: $${newTotal}`);
     return { success: true, price: data.price, miles: data.miles, total: newTotal };
-
   } catch (err) {
     console.error('Error in processOfferCard:', err.message);
     throw err;
