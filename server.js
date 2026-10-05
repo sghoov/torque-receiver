@@ -66,18 +66,21 @@ async function processOfferCard() {
 
     console.log('Sending image to Gemini via REST...');
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{
-          parts: [
-            { inlineData: { mimeType: mimeType, data: base64Data } },
-            { text: `Extract offer payout price and total miles in raw JSON format: {"price": 15.20, "miles": 6.2}` }
-          ]
-        }]
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { mimeType: mimeType, data: base64Data } },
+              { text: 'Extract the offer payout price (as a number) and total miles (as a number) from this screenshot. Return strictly valid raw JSON without markdown formatting in this exact shape: {"price": 15.20, "miles": 6.2}' }
+            ]
+          }
+        ]
       })
     });
 
@@ -89,7 +92,9 @@ async function processOfferCard() {
     }
 
     const responseText = resData.candidates[0].content.parts[0].text;
-    const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
+    
+    // Clean potential markdown blocks cleanly before parsing JSON
+    const cleanJson = responseText.replace(/```json\s*|```/g, '').trim();
     const data = JSON.parse(cleanJson);
 
     // Save outputs back to Dropbox
