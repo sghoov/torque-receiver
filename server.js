@@ -75,7 +75,7 @@ async function processOfferCard() {
     console.log('Sending image to Gemini 1.5 Flash...');
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-    const prompt = `You are an assistant for a delivery driver live stream.
+    const promptText = `You are an assistant for a delivery driver live stream.
 Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
 Extract:
 1. Main offer payout price (e.g. 15.20)
@@ -85,15 +85,16 @@ Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers
 Return ONLY raw JSON in this format:
 {"price": 15.20, "miles": 6.2}`;
 
-    const result = await model.generateContent([
-      prompt,
-      {
-        inlineData: {
-          data: base64Data,
-          mimeType: 'image/png'
-        }
+    const imagePart = {
+      inlineData: {
+        data: base64Data,
+        mimeType: 'image/png'
       }
-    ]);
+    };
+
+    const result = await model.generateContent({
+      contents: [{ role: 'user', parts: [imagePart, { text: promptText }] }]
+    });
 
     const response = await result.response;
     const responseText = response.text();
