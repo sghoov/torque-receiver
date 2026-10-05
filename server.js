@@ -50,7 +50,7 @@ async function processOfferCard() {
     console.log('Fetching /offercard.png from Dropbox via REST...');
 
     // 1. Download image directly via Dropbox Content API
-    const dbxDownloadRes = await fetch('[https://content.dropboxapi.com/2/files/download](https://content.dropboxapi.com/2/files/download)', {
+    const dbxDownloadRes = await fetch('https://content.dropboxapi.com/2/files/download', {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${dbxToken}`,
@@ -76,7 +76,7 @@ async function processOfferCard() {
     console.log('Sending image to Gemini via REST...');
 
     // 2. Call Gemini 2.5 Flash API
-    const url = `[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$){apiKey}`;
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -107,7 +107,7 @@ async function processOfferCard() {
 
     // 3. Helper to upload files directly via Dropbox Content API
     const uploadToDropbox = async (filePath, contentString) => {
-      const uploadRes = await fetch('[https://content.dropboxapi.com/2/files/upload](https://content.dropboxapi.com/2/files/upload)', {
+      const uploadRes = await fetch('https://content.dropboxapi.com/2/files/upload', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${dbxToken}`,
@@ -130,7 +130,7 @@ async function processOfferCard() {
     // Read current total if it exists
     let currentTotal = 0;
     try {
-      const totalRes = await fetch('[https://content.dropboxapi.com/2/files/download](https://content.dropboxapi.com/2/files/download)', {
+      const totalRes = await fetch('https://content.dropboxapi.com/2/files/download', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${dbxToken}`,
