@@ -71,9 +71,16 @@ async function processOfferCard() {
     const buffer = Buffer.isBuffer(fileBinary) ? fileBinary : Buffer.from(fileBinary);
     const base64Data = buffer.toString('base64');
 
-    // 2. Initialize Gemini 1.5 Flash
-    console.log('Sending image to Gemini 1.5 Flash...');
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    // Detect if image buffer starts with JPEG header (FF D8 FF) vs PNG header
+    let mimeType = 'image/png';
+    if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
+      mimeType = 'image/jpeg';
+      console.log('Detected JPEG header in offercard file.');
+    }
+
+    // 2. Initialize Gemini Model (using gemini-1.5-flash-latest)
+    console.log('Sending image to Gemini AI Vision...');
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
 
     const promptText = `You are an assistant for a delivery driver live stream.
 Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
@@ -85,16 +92,15 @@ Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers
 Return ONLY raw JSON in this format:
 {"price": 15.20, "miles": 6.2}`;
 
-    const imagePart = {
-      inlineData: {
-        data: base64Data,
-        mimeType: 'image/png'
+    const result = await model.generateContent([
+      promptText,
+      {
+        inlineData: {
+          mimeType: mimeType,
+          data: base64Data
+        }
       }
-    };
-
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [imagePart, { text: promptText }] }]
-    });
+    ]);
 
     const response = await result.response;
     const responseText = response.text();
