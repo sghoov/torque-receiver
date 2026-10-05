@@ -69,7 +69,7 @@ async function processOfferCard() {
     // Ensure fileBinary is safely converted to Buffer -> base64
     const fileBinary = dbxResponse.result.fileBinary;
     const buffer = Buffer.isBuffer(fileBinary) ? fileBinary : Buffer.from(fileBinary);
-    const base64Data = buffer.toString('base64');
+    const base64Data = buffer.toString('base64').replace(/[\r\n]/g, '');
 
     // Detect if image buffer starts with JPEG header (FF D8 FF) vs PNG header
     let mimeType = 'image/png';
@@ -78,17 +78,12 @@ async function processOfferCard() {
       console.log('Detected JPEG header in offercard file.');
     }
 
-    // 2. Initialize Gemini Model (using gemini-1.5-flash-latest)
+    // 2. Initialize Gemini Model (using gemini-1.5-flash)
     console.log('Sending image to Gemini AI Vision...');
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
-    const promptText = `You are an assistant for a delivery driver live stream.
-Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
-Extract:
-1. Main offer payout price (e.g. 15.20)
-2. Total trip distance in miles (e.g. 6.2)
-
-Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
+    const promptText = `Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
+Extract the main payout price and total trip distance in miles.
 Return ONLY raw JSON in this format:
 {"price": 15.20, "miles": 6.2}`;
 
@@ -103,7 +98,13 @@ Return ONLY raw JSON in this format:
     ]);
 
     const response = await result.response;
-    const responseText = response.text();
+    let responseText = '';
+    
+    if (response.candidates && response.candidates[0] && response.candidates[0].content) {
+      responseText = response.candidates[0].content.parts[0].text;
+    } else {
+      responseText = response.text();
+    }
     
     const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
     const data = JSON.parse(cleanJson);
