@@ -61,14 +61,14 @@ async function processOfferCard() {
     console.log('Sending image to Gemini 1.5 Flash...');
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
     
-    const response = await model.generateContent([
-      {
-        inlineData: {
-          mimeType: 'image/png',
-          data: imageBuffer.toString('base64')
-        }
-      },
-      `You are an assistant for a delivery driver live stream.
+    const imagePart = {
+      inlineData: {
+        data: imageBuffer.toString('base64'),
+        mimeType: 'image/png'
+      }
+    };
+
+    const prompt = `You are an assistant for a delivery driver live stream.
        Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
        Extract:
        1. Main offer payout price (e.g. 15.20)
@@ -76,10 +76,11 @@ async function processOfferCard() {
 
        Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
        Return ONLY raw JSON in this format:
-       {"price": 15.20, "miles": 6.2}`
-    ]);
+       {"price": 15.20, "miles": 6.2}`;
 
-    // 3. Clean and parse JSON response without regex formatting risks
+    const response = await model.generateContent([prompt, imagePart]);
+
+    // 3. Clean and parse JSON response
     const responseText = response.response.text();
     const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
     const data = JSON.parse(cleanJson);
