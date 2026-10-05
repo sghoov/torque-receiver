@@ -71,14 +71,14 @@ async function processOfferCard() {
     const buffer = Buffer.isBuffer(fileBinary) ? fileBinary : Buffer.from(fileBinary);
     const base64Data = buffer.toString('base64').replace(/[\r\n]/g, '');
 
-    // Detect if image buffer starts with JPEG header (FF D8 FF) vs PNG header
+    // Detect image MIME type safely
     let mimeType = 'image/png';
     if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
       mimeType = 'image/jpeg';
       console.log('Detected JPEG header in offercard file.');
     }
 
-    // 2. Initialize Gemini Model (using gemini-1.5-flash)
+    // 2. Initialize Gemini Model
     console.log('Sending image to Gemini AI Vision...');
     const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
@@ -87,24 +87,16 @@ Extract the main payout price and total trip distance in miles.
 Return ONLY raw JSON in this format:
 {"price": 15.20, "miles": 6.2}`;
 
-    const result = await model.generateContent([
-      promptText,
-      {
-        inlineData: {
-          mimeType: mimeType,
-          data: base64Data
-        }
+    const imagePart = {
+      inlineData: {
+        data: base64Data,
+        mimeType: mimeType
       }
-    ]);
+    };
 
+    const result = await model.generateContent([promptText, imagePart]);
     const response = await result.response;
-    let responseText = '';
-    
-    if (response.candidates && response.candidates[0] && response.candidates[0].content) {
-      responseText = response.candidates[0].content.parts[0].text;
-    } else {
-      responseText = response.text();
-    }
+    const responseText = response.text();
     
     const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
     const data = JSON.parse(cleanJson);
