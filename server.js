@@ -8,19 +8,11 @@ const io = require('socket.io')(http, {
     }
 });
 
-// AI & Dropbox SDK Imports
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+// Dropbox SDK Import
 const { Dropbox } = require('dropbox');
 
 // Enable JSON body parsing for API endpoints
 app.use(express.json());
-
-// Initialize Gemini SDK with API key from Render Environment
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) {
-    console.warn("WARNING: GEMINI_API_KEY environment variable is not defined!");
-}
-const genAI = new GoogleGenerativeAI(apiKey || '');
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
 
@@ -48,58 +40,83 @@ let currentLat = 37.6017;
 let currentLon = -122.4868;
 
 // ==========================================
-// AI VISION OFFER CARD PROCESSOR (GEMINI)
+// AI VISION OFFER CARD PROCESSOR (REST API)
 // ==========================================
 async function processOfferCard() {
   try {
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error('GEMINI_API_KEY environment variable is missing on Render');
-    }
-    if (!process.env.DROPBOX_ACCESS_TOKEN) {
-      throw new Error('DROPBOX_ACCESS_TOKEN environment variable is missing on Render');
-    }
+    const apiKey = process.env.GEMINI_API_KEY;
+    const dbxToken = process.env.DROPBOX_ACCESS_TOKEN;
 
-    const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN });
+    if (!apiKey) throw new Error('GEMINI_API_KEY environment variable is missing on Render');
+    if (!dbxToken) throw new Error('DROPBOX_ACCESS_TOKEN environment variable is missing on Render');
+
+    const dbx = new Dropbox({ accessToken: dbxToken });
 
     console.log('Fetching /offercard.png from Dropbox...');
     
     // 1. Download offercard.png from Dropbox
     const dbxResponse = await dbx.filesDownload({ path: '/offercard.png' });
     
-    // Ensure fileBinary is safely converted to Buffer -> base64
+    // Safe binary buffer conversion
     const fileBinary = dbxResponse.result.fileBinary;
     const buffer = Buffer.isBuffer(fileBinary) ? fileBinary : Buffer.from(fileBinary);
-    const base64Data = buffer.toString('base64').replace(/[\r\n]/g, '');
+    const base64Data = buffer.toString('base64');
 
-    // Detect image MIME type safely
+    // Detect JPEG vs PNG header
     let mimeType = 'image/png';
     if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
       mimeType = 'image/jpeg';
       console.log('Detected JPEG header in offercard file.');
     }
 
-    // 2. Initialize Gemini Model
-    console.log('Sending image to Gemini AI Vision...');
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    console.log('Sending image directly to Gemini 1.5 Flash via REST...');
 
-    const promptText = `Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
-Extract the main payout price and total trip distance in miles.
+    // 2. Direct REST call to Gemini 1.5 Flash API
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+
+    const payload = {
+      contents: [
+        {
+          parts: [
+            {
+              inlineData: {
+                mimeType: mimeType,
+                data: base64Data
+              }
+            },
+            {
+              text: `You are an assistant for a delivery driver live stream.
+Look at this delivery offer card (DoorDash, Uber Eats, or Instacart).
+Extract:
+1. Main offer payout price (e.g. 15.20)
+2. Total trip distance in miles (e.g. 6.2)
+
+Ignore tip breakdowns, batch sub-totals, map street numbers, and highway markers.
 Return ONLY raw JSON in this format:
-{"price": 15.20, "miles": 6.2}`;
-
-    const imagePart = {
-      inlineData: {
-        data: base64Data,
-        mimeType: mimeType
-      }
+{"price": 15.20, "miles": 6.2}`
+            }
+          ]
+        }
+      ]
     };
 
-    const result = await model.generateContent([promptText, imagePart]);
-    const response = await result.response;
-    const responseText = response.text();
-    
+    const apiRes = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+
+    const apiData = await apiRes.json();
+
+    if (!apiRes.ok) {
+      console.error('Gemini API Error Body:', JSON.stringify(apiData));
+      throw new Error(`Gemini API Error [HTTP ${apiRes.status}]: ${apiData.error?.message || 'Unknown error'}`);
+    }
+
+    const responseText = apiData.candidates[0].content.parts[0].text;
     const cleanJson = responseText.replaceAll('```json', '').replaceAll('```', '').trim();
     const data = JSON.parse(cleanJson);
+
     console.log(`Parsed Values -> Price: $${data.price} | Miles: ${data.miles} mi`);
 
     // 3. Fetch current total from /total.txt
@@ -133,8 +150,8 @@ Return ONLY raw JSON in this format:
     return { success: true, price: data.price, miles: data.miles, total: newTotal };
 
   } catch (err) {
-    console.error('Error processing offer card detail:', err);
-    throw new Error(err.message || 'Processing failed');
+    console.error('Error in processOfferCard:', err.message);
+    throw err;
   }
 }
 
@@ -152,8 +169,8 @@ app.post('/process-card', async (req, res) => {
     const result = await processOfferCard();
     res.json({ status: 'success', data: result });
   } catch (error) {
-    console.error('API /process-card failed:', error);
-    res.status(500).json({ status: 'error', message: error.message || error.toString() });
+    console.error('API /process-card failed:', error.message);
+    res.status(500).json({ status: 'error', message: error.message });
   }
 });
 
