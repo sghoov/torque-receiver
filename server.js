@@ -8,7 +8,7 @@ const io = require('socket.io')(http, {
     }
 });
 
-// Enable JSON body parsing
+// Enable JSON body parsing for API endpoints and direct payloads
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
@@ -37,7 +37,7 @@ let lastKnownRawMiles = 0.0;
 let currentLat = 37.6017; 
 let currentLon = -122.4868;
 
-// DROPBOX HELPER FUNCTIONS
+// DROPBOX REST API HELPERS
 async function downloadFromDropbox(dbxToken, filePath) {
   const res = await fetch('https://content.dropboxapi.com/2/files/download', {
     method: 'POST',
@@ -69,6 +69,44 @@ async function uploadToDropbox(dbxToken, filePath, contentString) {
     const errText = await uploadRes.text();
     console.error(`Dropbox Upload Error for ${filePath}:`, errText);
   }
+}
+
+// Helper to get or initialize shift stats structure
+function getDefaultStats() {
+  return {
+    totals: {
+      grand_total: 0,
+      delivery_base: 0,
+      delivery_tips: 0,
+      stream_tips: 0,
+      miles: 0,
+      deliveries: 0
+    },
+    apps: {
+      doordash: { base: 0, tips: 0, total: 0, miles: 0, deliveries: 0 },
+      ubereats: { base: 0, tips: 0, total: 0, miles: 0, deliveries: 0 },
+      grubhub: { base: 0, tips: 0, total: 0, miles: 0, deliveries: 0 },
+      other: { base: 0, tips: 0, total: 0, miles: 0, deliveries: 0 }
+    },
+    stream_tips: {
+      superchats: 0,
+      venmo: 0,
+      paypal: 0,
+      cash: 0,
+      total: 0
+    },
+    history: []
+  };
+}
+
+// Helper to normalize app names to internal keys
+function normalizeAppKey(rawName) {
+  if (!rawName) return 'other';
+  const clean = rawName.toLowerCase().replace(/[^a-z]/g, '');
+  if (clean.includes('doordash') || clean === 'dd') return 'doordash';
+  if (clean.includes('uber') || clean === 'ue') return 'ubereats';
+  if (clean.includes('grubhub') || clean === 'gh') return 'grubhub';
+  return 'other';
 }
 
 // ==========================================
@@ -112,21 +150,21 @@ async function processOfferCard(isSubtractMode = false) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
     const promptText = `
-      Extract the details from this delivery offer screenshot.
+      Extract details from this delivery offer screenshot.
       Return strictly valid raw JSON without markdown formatting in this exact shape:
       {
         "price": 15.20,
         "miles": 6.2,
-        "store_name": "Store or Restaurant Name",
-        "app_name": "DoorDash", 
+        "store_name": "Store Name",
+        "app_name": "DoorDash",
         "pickup_count": 1,
         "dropoff_count": 1,
         "is_stacked": false
       }
-      Notes:
+      Rules:
       - app_name must be one of: "DoorDash", "Uber Eats", "Grubhub", "Amazon Flex", or "Other".
-      - If there are multiple pickups or dropoffs (stacked offer), set is_stacked to true and count them.
-      - If store_name is not visible, use "Unknown Merchant".
+      - If store_name is missing or unreadable, return "Unknown Merchant".
+      - If there are multiple pickups or dropoffs (stacked offer), set is_stacked to true.
     `;
 
     const response = await fetch(url, {
@@ -156,38 +194,27 @@ async function processOfferCard(isSubtractMode = false) {
     const cleanJson = responseText.replace(/```json\s*|```/g, '').trim();
     const data = JSON.parse(cleanJson);
 
-    // Read current shift_stats.json from Dropbox (or create default)
-    let stats = {
-      totals: { earnings: 0, miles: 0, deliveries: 0 },
-      apps: {
-        doordash: { earnings: 0, miles: 0, deliveries: 0 },
-        ubereats: { earnings: 0, miles: 0, deliveries: 0 },
-        grubhub: { earnings: 0, miles: 0, deliveries: 0 },
-        other: { earnings: 0, miles: 0, deliveries: 0 }
-      },
-      history: []
-    };
-
+    // Read shift_stats.json
+    let stats = getDefaultStats();
     const existingStatsText = await downloadFromDropbox(dbxToken, '/shift_stats.json');
     if (existingStatsText) {
-      try { stats = JSON.parse(existingStatsText); } catch (e) {}
+      try { stats = Object.assign(getDefaultStats(), JSON.parse(existingStatsText)); } catch (e) {}
     }
 
-    const appKey = (data.app_name || 'other').toLowerCase().replace(/\s+/g, '');
-    const activeApp = stats.apps[appKey] ? appKey : 'other';
-
+    const activeAppKey = normalizeAppKey(data.app_name);
     let offerPrice = parseFloat(data.price) || 0;
     let offerMiles = parseFloat(data.miles) || 0;
 
     if (isSubtractMode) {
-      // Subtraction Mode: Deduct price and miles
-      stats.totals.earnings = Math.max(0, stats.totals.earnings - offerPrice);
+      stats.totals.grand_total = Math.max(0, stats.totals.grand_total - offerPrice);
+      stats.totals.delivery_base = Math.max(0, stats.totals.delivery_base - offerPrice);
       stats.totals.miles = Math.max(0, stats.totals.miles - offerMiles);
       stats.totals.deliveries = Math.max(0, stats.totals.deliveries - 1);
 
-      stats.apps[activeApp].earnings = Math.max(0, stats.apps[activeApp].earnings - offerPrice);
-      stats.apps[activeApp].miles = Math.max(0, stats.apps[activeApp].miles - offerMiles);
-      stats.apps[activeApp].deliveries = Math.max(0, stats.apps[activeApp].deliveries - 1);
+      stats.apps[activeAppKey].base = Math.max(0, stats.apps[activeAppKey].base - offerPrice);
+      stats.apps[activeAppKey].total = Math.max(0, stats.apps[activeAppKey].total - offerPrice);
+      stats.apps[activeAppKey].miles = Math.max(0, stats.apps[activeAppKey].miles - offerMiles);
+      stats.apps[activeAppKey].deliveries = Math.max(0, stats.apps[activeAppKey].deliveries - 1);
 
       stats.history.push({
         type: "REMOVAL",
@@ -198,14 +225,15 @@ async function processOfferCard(isSubtractMode = false) {
         miles: -offerMiles
       });
     } else {
-      // Addition Mode: Accumulate price and miles
-      stats.totals.earnings += offerPrice;
+      stats.totals.grand_total += offerPrice;
+      stats.totals.delivery_base += offerPrice;
       stats.totals.miles += offerMiles;
       stats.totals.deliveries += 1;
 
-      stats.apps[activeApp].earnings += offerPrice;
-      stats.apps[activeApp].miles += offerMiles;
-      stats.apps[activeApp].deliveries += 1;
+      stats.apps[activeAppKey].base += offerPrice;
+      stats.apps[activeAppKey].total += offerPrice;
+      stats.apps[activeAppKey].miles += offerMiles;
+      stats.apps[activeAppKey].deliveries += 1;
 
       stats.history.push({
         type: "ADDITION",
@@ -222,9 +250,11 @@ async function processOfferCard(isSubtractMode = false) {
 
     // Save outputs back to Dropbox
     await uploadToDropbox(dbxToken, '/shift_stats.json', JSON.stringify(stats, null, 2));
-    await uploadToDropbox(dbxToken, '/total.txt', stats.totals.earnings.toFixed(2));
+    await uploadToDropbox(dbxToken, '/total.txt', stats.totals.grand_total.toFixed(2));
     await uploadToDropbox(dbxToken, '/offer_miles.txt', stats.totals.miles.toFixed(1));
-    await uploadToDropbox(dbxToken, `/app_${activeApp}_total.txt`, stats.apps[activeApp].earnings.toFixed(2));
+    await uploadToDropbox(dbxToken, '/offer_store.txt', data.store_name || 'Unknown Merchant');
+    await uploadToDropbox(dbxToken, `/${activeAppKey}_total.txt`, stats.apps[activeAppKey].total.toFixed(2));
+    await uploadToDropbox(dbxToken, `/${activeAppKey}_tips.txt`, stats.apps[activeAppKey].tips.toFixed(2));
 
     return {
       success: true,
@@ -234,14 +264,12 @@ async function processOfferCard(isSubtractMode = false) {
         miles: offerMiles,
         store: data.store_name,
         app: data.app_name,
-        is_stacked: data.is_stacked,
-        pickups: data.pickup_count,
-        dropoffs: data.dropoff_count
+        is_stacked: data.is_stacked
       },
       totals: {
-        total_earnings: stats.totals.earnings.toFixed(2),
+        grand_total: stats.totals.grand_total.toFixed(2),
         total_miles: stats.totals.miles.toFixed(1),
-        app_earnings: stats.apps[activeApp].earnings.toFixed(2)
+        app_total: stats.apps[activeAppKey].total.toFixed(2)
       }
     };
 
@@ -259,35 +287,35 @@ async function undoLastOffer() {
   const existingStatsText = await downloadFromDropbox(dbxToken, '/shift_stats.json');
   if (!existingStatsText) throw new Error('No shift stats found on Dropbox.');
 
-  let stats = JSON.parse(existingStatsText);
+  let stats = Object.assign(getDefaultStats(), JSON.parse(existingStatsText));
   if (!stats.history || stats.history.length === 0) {
     throw new Error('No offer history available to undo.');
   }
 
-  // Pop the last entry
   const lastEntry = stats.history.pop();
-  const appKey = (lastEntry.app || 'other').toLowerCase().replace(/\s+/g, '');
-  const activeApp = stats.apps[appKey] ? appKey : 'other';
-
+  const activeAppKey = normalizeAppKey(lastEntry.app);
   const price = Math.abs(lastEntry.price || 0);
   const miles = Math.abs(lastEntry.miles || 0);
 
   if (lastEntry.type === "ADDITION") {
-    stats.totals.earnings = Math.max(0, stats.totals.earnings - price);
+    stats.totals.grand_total = Math.max(0, stats.totals.grand_total - price);
+    stats.totals.delivery_base = Math.max(0, stats.totals.delivery_base - price);
     stats.totals.miles = Math.max(0, stats.totals.miles - miles);
     stats.totals.deliveries = Math.max(0, stats.totals.deliveries - 1);
 
-    stats.apps[activeApp].earnings = Math.max(0, stats.apps[activeApp].earnings - price);
-    stats.apps[activeApp].miles = Math.max(0, stats.apps[activeApp].miles - miles);
-    stats.apps[activeApp].deliveries = Math.max(0, stats.apps[activeApp].deliveries - 1);
+    stats.apps[activeAppKey].base = Math.max(0, stats.apps[activeAppKey].base - price);
+    stats.apps[activeAppKey].total = Math.max(0, stats.apps[activeAppKey].total - price);
+    stats.apps[activeAppKey].miles = Math.max(0, stats.apps[activeAppKey].miles - miles);
+    stats.apps[activeAppKey].deliveries = Math.max(0, stats.apps[activeAppKey].deliveries - 1);
   }
 
   await uploadToDropbox(dbxToken, '/shift_stats.json', JSON.stringify(stats, null, 2));
-  await uploadToDropbox(dbxToken, '/total.txt', stats.totals.earnings.toFixed(2));
+  await uploadToDropbox(dbxToken, '/total.txt', stats.totals.grand_total.toFixed(2));
   await uploadToDropbox(dbxToken, '/offer_miles.txt', stats.totals.miles.toFixed(1));
-  await uploadToDropbox(dbxToken, `/app_${activeApp}_total.txt`, stats.apps[activeApp].earnings.toFixed(2));
+  await uploadToDropbox(dbxToken, `/${activeAppKey}_total.txt`, stats.apps[activeAppKey].total.toFixed(2));
+  await uploadToDropbox(dbxToken, `/${activeAppKey}_tips.txt`, stats.apps[activeAppKey].tips.toFixed(2));
 
-  return { success: true, undoneEntry: lastEntry, newTotal: stats.totals.earnings.toFixed(2) };
+  return { success: true, undoneEntry: lastEntry, newTotal: stats.totals.grand_total.toFixed(2) };
 }
 
 // ==========================================
@@ -298,7 +326,7 @@ app.get('/', (req, res) => {
     res.send('Telemetry physics engine & AI Vision server is up and running safely!');
 });
 
-// Route to process offer cards (supports query parameter ?subtract=true)
+// Route to process offer cards
 app.post('/process-card', async (req, res) => {
   try {
     const isSubtract = req.query.subtract === 'true' || (req.body && req.body.subtract === true);
@@ -310,13 +338,73 @@ app.post('/process-card', async (req, res) => {
   }
 });
 
-// Route to undo the last scanned offer card
+// Route to undo last offer
 app.post('/undo-offer', async (req, res) => {
   try {
     const result = await undoLastOffer();
     res.json({ status: 'success', data: result });
   } catch (error) {
     console.error('API /undo-offer failed:', error.message);
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
+
+// Endpoint to add App Tips (DD TIP, UBER TIP) and Stream Tips (Superchats, Venmo, Cash)
+app.post('/add-tip', async (req, res) => {
+  try {
+    const dbxToken = process.env.DROPBOX_ACCESS_TOKEN;
+    if (!dbxToken) throw new Error('DROPBOX_ACCESS_TOKEN missing');
+
+    const { amount, app_name, type } = req.body;
+    const tipValue = parseFloat(amount) || 0;
+
+    let stats = getDefaultStats();
+    const existingStatsText = await downloadFromDropbox(dbxToken, '/shift_stats.json');
+    if (existingStatsText) {
+      try { stats = Object.assign(getDefaultStats(), JSON.parse(existingStatsText)); } catch (e) {}
+    }
+
+    // 1. App-Specific Tip Breakout (DoorDash, Uber Eats, Grubhub)
+    if (app_name) {
+      const activeAppKey = normalizeAppKey(app_name);
+      stats.apps[activeAppKey].tips += tipValue;
+      stats.apps[activeAppKey].total += tipValue;
+      stats.totals.delivery_tips += tipValue;
+      stats.totals.grand_total += tipValue;
+
+      // Update app tip txt file on Dropbox
+      await uploadToDropbox(dbxToken, `/${activeAppKey}_tips.txt`, stats.apps[activeAppKey].tips.toFixed(2));
+      await uploadToDropbox(dbxToken, `/${activeAppKey}_total.txt`, stats.apps[activeAppKey].total.toFixed(2));
+    }
+    // 2. Stream Tips (Superchats, Venmo, PayPal, Cash)
+    else if (type) {
+      const tipType = type.toLowerCase();
+      if (stats.stream_tips[tipType] !== undefined) {
+        stats.stream_tips[tipType] += tipValue;
+      } else {
+        stats.stream_tips.cash += tipValue;
+      }
+      stats.stream_tips.total += tipValue;
+      stats.totals.stream_tips += tipValue;
+      stats.totals.grand_total += tipValue;
+
+      await uploadToDropbox(dbxToken, '/stream_tips.txt', stats.stream_tips.total.toFixed(2));
+    }
+
+    await uploadToDropbox(dbxToken, '/shift_stats.json', JSON.stringify(stats, null, 2));
+    await uploadToDropbox(dbxToken, '/total.txt', stats.totals.grand_total.toFixed(2));
+
+    res.json({
+      status: 'success',
+      data: {
+        app_tips: app_name ? stats.apps[normalizeAppKey(app_name)].tips.toFixed(2) : undefined,
+        stream_tips: stats.stream_tips.total.toFixed(2),
+        grand_total: stats.totals.grand_total.toFixed(2)
+      }
+    });
+
+  } catch (error) {
+    console.error('API /add-tip failed:', error.message);
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
