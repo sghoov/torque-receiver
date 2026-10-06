@@ -14,7 +14,7 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// External API Clients - Updated to Permanent Refresh Token Auth
+// External API Clients - Permanent Refresh Token Auth
 const dbx = new Dropbox({
     clientId: process.env.DROPBOX_APP_KEY,
     clientSecret: process.env.DROPBOX_APP_SECRET,
@@ -305,7 +305,7 @@ app.get('/live', async (req, res) => {
 });
 
 // =========================================================================
-// ADDED ENDPOINT 1: AI OFFER CARD PARSER (/parse-offer)
+// AI OFFER CARD PARSER (/parse-offer)
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
     try {
@@ -314,7 +314,11 @@ app.post('/parse-offer', async (req, res) => {
             return res.status(400).json({ error: 'No image provided' });
         }
 
-        const cleanBase64 = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+        // Robust base64 cleaning to remove data URIs, headers, and spaces/newlines
+        const cleanBase64 = String(imageBase64)
+            .replace(/^data:image\/\w+;base64,/, '')
+            .replace(/\s+/g, '');
+
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
@@ -334,12 +338,17 @@ Rules:
 2. "tip" is the explicit tip amount if broken down on the card (e.g., Instacart tip line item). If no tip is broken down separately, set "tip" to 0.00.
 3. "merchant" is the pickup store/restaurant (e.g., "Costco", "McDonald's", "Safeway", "Amazon DSH1"). If unknown, set to "DELIVERY OFFER".`;
 
-        const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/jpeg' } }];
+        const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
 
-        const rawText = responseText.replace(/```json|```/g, '').trim();
-        const parsedData = JSON.parse(rawText);
+        // Safe regex JSON parsing wrapper
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+            throw new Error(`Gemini response did not contain JSON: ${responseText}`);
+        }
+
+        const parsedData = JSON.parse(jsonMatch[0]);
 
         const appName = parsedData.app_name || 'Gig Offer';
         const merchant = (parsedData.merchant || 'DELIVERY OFFER').toUpperCase();
@@ -376,13 +385,13 @@ Rules:
         });
 
     } catch (err) {
-        console.error('AI Offer Parsing Error:', err);
-        res.status(500).json({ error: 'Failed to parse offer card screenshot' });
+        console.error('AI Offer Parsing Error Detail:', err.message || err);
+        res.status(500).json({ error: 'Failed to parse offer card screenshot', details: err.message });
     }
 });
 
 // =========================================================================
-// ADDED ENDPOINT 2: MANUAL TIP RECEIVER (/add-tip)
+// MANUAL TIP RECEIVER (/add-tip)
 // =========================================================================
 app.post('/add-tip', async (req, res) => {
     try {
