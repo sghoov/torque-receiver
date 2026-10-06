@@ -350,8 +350,8 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        // Standardized model name to prevent API model mismatches
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        // Restored original working model string
+        const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
@@ -441,7 +441,7 @@ Rules:
             updatedAt: currentStats.lastUpdated
         };
 
-        // Batch upload files to Dropbox - updated both mile.txt and miles.txt for full compatibility
+        // Batch upload files to Dropbox - synchronized both miles.txt and mile.txt
         const uploadPromises = [
             // Current Offer Text Files
             uploadToDropbox('merchant_name.txt', merchant),
@@ -451,7 +451,7 @@ Rules:
             uploadToDropbox('app_color.txt', theme.color),
             uploadToDropbox('offer_data.json', JSON.stringify(offerDataJSON, null, 2)),
 
-            // Running Shift Totals (Synchronized both mile.txt and miles.txt)
+            // Running Shift Totals (Synchronized both miles.txt and mile.txt)
             uploadToDropbox('total.txt', `$${newGrandTotal}`),
             uploadToDropbox('miles.txt', newTotalMiles),
             uploadToDropbox('mile.txt', newTotalMiles),
