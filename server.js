@@ -37,9 +37,10 @@ const APP_THEMES = {
 async function uploadToDropbox(filename, content) {
     if (!process.env.DROPBOX_REFRESH_TOKEN) return;
     try {
+        const cleanPath = filename.startsWith('/') ? filename : '/' + filename;
         return await dbx.filesUpload({
-            path: '/' + filename,
-            contents: content,
+            path: cleanPath,
+            contents: String(content),
             mode: { '.tag': 'overwrite' }
         });
     } catch (err) {
@@ -91,10 +92,11 @@ async function getShiftStatsFromDropbox() {
     }
 }
 
-// Helper to safely read a floating-point value from Dropbox file or default to 0
+// Helper to safely read a floating-point value from Dropbox file or fallback to stats
 async function readDropboxFloat(filePath, defaultValue = 0.0) {
     try {
-        const fileDownload = await dbx.filesDownload({ path: filePath });
+        const cleanPath = filePath.startsWith('/') ? filePath : '/' + filePath;
+        const fileDownload = await dbx.filesDownload({ path: cleanPath });
         let contents = fileDownload.result.fileBinary ? Buffer.from(fileDownload.result.fileBinary).toString('utf-8') : fileDownload.result.fileBinary;
         let cleanVal = String(contents).replace(/[^0-9.]/g, '');
         let parsed = parseFloat(cleanVal);
@@ -348,7 +350,8 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
+        // Standardized model name to prevent API model mismatches
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
@@ -390,14 +393,18 @@ Rules:
         // Fetch theme metadata (color & logo)
         const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
 
-        // Fetch current stats from Dropbox
+        // Fetch current stats from Dropbox JSON
         let currentStats = await getShiftStatsFromDropbox();
 
-        // 1. Read existing totals
-        let existingGrandTotal = await readDropboxFloat('/total.txt', parseFloat(currentStats.grand_total || 0));
-        let existingTotalMiles = await readDropboxFloat('/miles.txt', parseFloat(currentStats.total_miles || 0));
+        // Safe Fallback Base Numbers from current JSON state
+        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
 
-        // 2. Add current accepted offer to totals
+        // Read direct file values with JSON fallback
+        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+
+        // Add current accepted offer to totals
         let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
         let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
 
@@ -434,7 +441,7 @@ Rules:
             updatedAt: currentStats.lastUpdated
         };
 
-        // Batch upload files to Dropbox
+        // Batch upload files to Dropbox - updated both mile.txt and miles.txt for full compatibility
         const uploadPromises = [
             // Current Offer Text Files
             uploadToDropbox('merchant_name.txt', merchant),
@@ -444,9 +451,10 @@ Rules:
             uploadToDropbox('app_color.txt', theme.color),
             uploadToDropbox('offer_data.json', JSON.stringify(offerDataJSON, null, 2)),
 
-            // Running Shift Totals
+            // Running Shift Totals (Synchronized both mile.txt and miles.txt)
             uploadToDropbox('total.txt', `$${newGrandTotal}`),
             uploadToDropbox('miles.txt', newTotalMiles),
+            uploadToDropbox('mile.txt', newTotalMiles),
             uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2))
         ];
 
@@ -488,8 +496,11 @@ app.post('/remove-offer', async (req, res) => {
         const lastOffer = currentStats.offer_history.pop();
 
         // Read current running totals
-        let existingGrandTotal = await readDropboxFloat('/total.txt', parseFloat(currentStats.grand_total || 0));
-        let existingTotalMiles = await readDropboxFloat('/miles.txt', parseFloat(currentStats.total_miles || 0));
+        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+
+        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
 
         // Deduct last offer metrics (ensuring totals don't dip below 0)
         let newGrandTotal = Math.max(0, existingGrandTotal - lastOffer.pay).toFixed(2);
@@ -509,6 +520,7 @@ app.post('/remove-offer', async (req, res) => {
             uploadToDropbox('merchant_name.txt', '[CANCELED]'),
             uploadToDropbox('total.txt', `$${newGrandTotal}`),
             uploadToDropbox('miles.txt', newTotalMiles),
+            uploadToDropbox('mile.txt', newTotalMiles),
             uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2))
         ];
 
