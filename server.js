@@ -24,6 +24,16 @@ const dbx = new Dropbox({
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
+// APP BRAND THEME MAP
+const APP_THEMES = {
+    "DoorDash": { color: "#FF3008", logoFilename: "dd logo.png" },
+    "Uber Eats": { color: "#06C167", logoFilename: "uber eats logo.png" },
+    "Instacart": { color: "#00A254", logoFilename: "insta logo.png" },
+    "Amazon Flex": { color: "#00A8E8", logoFilename: "flex logo1.png" },
+    "Shipt": { color: "#00B2A9", logoFilename: "shipt logo.png" },
+    "Roadie": { color: "#C02823", logoFilename: "roadie logo.png" }
+};
+
 async function uploadToDropbox(filename, content) {
     if (!process.env.DROPBOX_REFRESH_TOKEN) return;
     try {
@@ -37,9 +47,30 @@ async function uploadToDropbox(filename, content) {
     }
 }
 
+async function copyDropboxLogo(sourceLogoFilename) {
+    if (!process.env.DROPBOX_REFRESH_TOKEN || !sourceLogoFilename) return;
+    try {
+        await dbx.filesCopyV2({
+            from_path: '/logos/' + sourceLogoFilename,
+            to_path: '/gig logo.png',
+            autorename: false,
+            mode: { '.tag': 'overwrite' }
+        });
+        console.log(`[Dropbox Logo Sync] Successfully copied /logos/${sourceLogoFilename} -> /gig logo.png`);
+    } catch (err) {
+        console.error(`[Dropbox Logo Copy Error]:`, err.status || err.message);
+    }
+}
+
 // Helper to safely fetch shift_stats.json using Buffer parsing
 async function getShiftStatsFromDropbox() {
-    let defaultStats = { app_tips: "0.00", stream_tips: "0.00", grand_total: "0.00" };
+    let defaultStats = { 
+        app_tips: "0.00", 
+        stream_tips: "0.00", 
+        grand_total: "0.00",
+        total_miles: "0.0",
+        offer_history: [] 
+    };
     try {
         const fileDownload = await dbx.filesDownload({ path: '/shift_stats.json' });
         
@@ -50,10 +81,26 @@ async function getShiftStatsFromDropbox() {
             contents = fileDownload.result.fileBinary;
         }
 
-        return JSON.parse(contents);
+        const stats = JSON.parse(contents);
+        if (!stats.offer_history) stats.offer_history = [];
+        if (!stats.total_miles) stats.total_miles = "0.0";
+        return stats;
     } catch (e) {
         console.log('shift_stats.json not found on Dropbox or failed to read, initializing fresh state...');
         return defaultStats;
+    }
+}
+
+// Helper to safely read a floating-point value from Dropbox file or default to 0
+async function readDropboxFloat(filePath, defaultValue = 0.0) {
+    try {
+        const fileDownload = await dbx.filesDownload({ path: filePath });
+        let contents = fileDownload.result.fileBinary ? Buffer.from(fileDownload.result.fileBinary).toString('utf-8') : fileDownload.result.fileBinary;
+        let cleanVal = String(contents).replace(/[^0-9.]/g, '');
+        let parsed = parseFloat(cleanVal);
+        return isNaN(parsed) ? defaultValue : parsed;
+    } catch (e) {
+        return defaultValue;
     }
 }
 
@@ -112,12 +159,11 @@ app.get('/update-range', (req, res) => {
             return res.send(`Success: Full shift clock, session miles, and range reset to 0!`);
         }
 
-        // 2. MID-STREAM CHARGE RESET (Resets battery bar ONLY, keeps shift timer & odometer running)
+        // 2. MID-STREAM CHARGE RESET
         if (req.query.reset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
             
-            // Baseline snapshot for current charge
             rangeDistanceBaseline = latestRawDistanceMiles;
 
             io.emit('manual_range_update', {
@@ -150,7 +196,6 @@ app.get('/update-range', (req, res) => {
 
 app.get('/live', async (req, res) => {
     try {
-        // Safe Parameter Parsing Helper (returns null if key is missing/invalid)
         const getParam = (key) => {
             let val = req.query[key] || req.query[key.toUpperCase()] || req.query[key.toLowerCase()];
             if (Array.isArray(val)) val = val[0];
@@ -162,7 +207,6 @@ app.get('/live', async (req, res) => {
         let speedMph = rawSpeedKmh * 0.621371;
         if (isNaN(speedMph) || speedMph < 0.8 || speedMph > 110) speedMph = 0;
 
-        // --- SERVER-SIDE SHIFT TIMER TRIGGER ---
         if (speedMph > 1.0 && shiftStartTime === null) {
             shiftStartTime = Date.now();
             console.log(`[Shift Timer] Started shift timer at ${new Date(shiftStartTime).toLocaleTimeString()}`);
@@ -170,22 +214,17 @@ app.get('/live', async (req, res) => {
 
         let shiftDurationSeconds = shiftStartTime ? Math.floor((Date.now() - shiftStartTime) / 1000) : 0;
 
-        // --- DISTANCE HANDLING ---
         let incomingDistanceKm = getParam('kff1204');
-        let rawTripDistanceMiles = lastKnownRawMiles; // Default to last known value if PID is missing
+        let rawTripDistanceMiles = lastKnownRawMiles;
 
         if (incomingDistanceKm !== null) {
             let parsedMiles = incomingDistanceKm * 0.621371;
             
-            // Ignore corrupted zero or near-zero drops from Bluetooth OBD disconnects
             if (!isNaN(parsedMiles) && parsedMiles > 0.01) {
-                
-                // 1. GPS Tunnel / Teleport Spike Filter (> 5.0 miles in a single tick)
                 if (lastKnownRawMiles > 0 && parsedMiles > (lastKnownRawMiles + 5.0)) {
                     console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${parsedMiles.toFixed(1)} mi`);
                     rawTripDistanceMiles = lastKnownRawMiles;
                 } 
-                // 2. TRUE TORQUE APP RESET GUARD: Only save baseline if reading drops close to zero (< 0.5 mi)
                 else if (lastKnownRawMiles > 1.0 && parsedMiles < 0.5) {
                     savedPreviousTripsMiles += Math.max(0, lastKnownRawMiles - sessionMilesBaseline);
                     sessionMilesBaseline = 0.0;
@@ -194,27 +233,22 @@ app.get('/live', async (req, res) => {
                     lastKnownRawMiles = parsedMiles;
                     console.log(`[Torque Auto-Reset] Valid reset confirmed at ${parsedMiles.toFixed(2)} mi.`);
                 } 
-                // 3. NORMAL ODOMETER ADVANCEMENT
                 else if (parsedMiles >= lastKnownRawMiles) {
                     rawTripDistanceMiles = parsedMiles;
                     lastKnownRawMiles = parsedMiles;
                 }
-                // Dips below lastKnownRawMiles that are not near zero are ignored (held at lastKnownRawMiles)
             }
         }
 
         latestRawDistanceMiles = rawTripDistanceMiles;
 
-        // Stream Session Odometer
         let currentUnweightedMiles = Math.max(0, rawTripDistanceMiles - sessionMilesBaseline);
         let trueSessionMiles = savedPreviousTripsMiles + currentUnweightedMiles;
         if (isNaN(trueSessionMiles)) trueSessionMiles = 0.0;
 
-        // Distance on Current Battery Charge
         let milesOnCurrentCharge = Math.max(0, rawTripDistanceMiles - rangeDistanceBaseline);
         let taxSaved = trueSessionMiles * MILEAGE_RATE;
 
-        // --- CALIBRATED RANGE MULTIPLIERS ---
         let hwyPercent = getParam('kff1297') || 0;
         let motorTorque = getParam('kff1225') || 0;
 
@@ -227,22 +261,19 @@ app.get('/live', async (req, res) => {
 
         let baseWeightedMiles = (milesOnCurrentCharge * styleMultiplier) * 1.05;
 
-        // --- ALTITUDE & HILL CLIMB CALCULATIONS ---
         let rawAltitudeMeters = getParam('kff1010');
         
-        // ONLY calculate hill climb if PID kff1010 was explicitly provided in this packet
         if (speedMph > 2 && rawAltitudeMeters !== null) {
             if (lastKnownAltitudeMeters !== null && !isNaN(lastKnownAltitudeMeters)) {
                 let deltaMeters = rawAltitudeMeters - lastKnownAltitudeMeters;
                 let deltaFeet = deltaMeters * 3.28084;
                 
-                // Real climbs between 3 ft and 120 ft per frame
                 if (deltaFeet > 3.0 && deltaFeet < 120.0) { 
                     let climbWeight = deltaFeet * 0.005; 
                     accumulatedTerrainAdjustmentMiles += climbWeight;
                 }
             }
-            lastKnownAltitudeMeters = rawAltitudeMeters; // Update altitude baseline
+            lastKnownAltitudeMeters = rawAltitudeMeters;
 
             if (motorTorque <= 0) {
                 let regenCreditPerSecond = (speedMph / 3600) * 0.20; 
@@ -253,7 +284,6 @@ app.get('/live', async (req, res) => {
         let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
         if (isNaN(adjustedTripDistanceMiles) || adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
 
-        // --- OTHER SENSOR PARSING ---
         let rawAmbientCelsius = getParam('k46');
         let tempFahrenheit = "--°F";
         if (rawAmbientCelsius !== null) {
@@ -288,9 +318,9 @@ app.get('/live', async (req, res) => {
             compass: compassHeading,
             lat: currentLat, 
             lon: currentLon,
-            tripMilesRaw: adjustedTripDistanceMiles,           // Drives Range Slider
-            actualSessionMilesRaw: trueSessionMiles,            // Drives Stream Odometer
-            shiftSeconds: shiftDurationSeconds,                 // Drives Stream Timer
+            tripMilesRaw: adjustedTripDistanceMiles,
+            actualSessionMilesRaw: trueSessionMiles,
+            shiftSeconds: shiftDurationSeconds,
             rawSpeed: speedMph,
             tax: "$" + taxSaved.toFixed(2)
         };
@@ -314,12 +344,10 @@ app.post('/parse-offer', async (req, res) => {
             return res.status(400).json({ error: 'No image provided' });
         }
 
-        // Robust base64 cleaning to remove data URIs, headers, and spaces/newlines
         const cleanBase64 = String(imageBase64)
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        // Updated model string requested by Google API response
         const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
@@ -343,7 +371,6 @@ Rules:
         const result = await model.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
 
-        // Safe regex JSON parsing wrapper
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
             throw new Error(`Gemini response did not contain JSON: ${responseText}`);
@@ -351,43 +378,155 @@ Rules:
 
         const parsedData = JSON.parse(jsonMatch[0]);
 
-        const appName = parsedData.app_name || 'Gig Offer';
+        const appName = parsedData.app_name || 'DoorDash';
         const merchant = (parsedData.merchant || 'DELIVERY OFFER').toUpperCase();
-        const pay = parseFloat(parsedData.pay || 0).toFixed(2);
-        const miles = parseFloat(parsedData.miles || 0).toFixed(1);
-        const tip = parseFloat(parsedData.tip || 0);
+        const payNum = parseFloat(parsedData.pay || 0);
+        const milesNum = parseFloat(parsedData.miles || 0);
+        const tipNum = parseFloat(parsedData.tip || 0);
 
+        const pay = payNum.toFixed(2);
+        const miles = milesNum.toFixed(1);
+
+        // Fetch theme metadata (color & logo)
+        const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
+
+        // Fetch current stats from Dropbox
+        let currentStats = await getShiftStatsFromDropbox();
+
+        // 1. Read existing totals
+        let existingGrandTotal = await readDropboxFloat('/total.txt', parseFloat(currentStats.grand_total || 0));
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', parseFloat(currentStats.total_miles || 0));
+
+        // 2. Add current accepted offer to totals
+        let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
+        let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
+
+        // Update shift stats object
+        currentStats.grand_total = newGrandTotal;
+        currentStats.total_miles = newTotalMiles;
+        if (tipNum > 0) {
+            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
+        }
+
+        // Add to history stack for rollback capability
+        const offerRecord = {
+            id: Date.now(),
+            appName,
+            merchant,
+            pay: payNum,
+            miles: milesNum,
+            tip: tipNum,
+            timestamp: new Date().toISOString()
+        };
+        currentStats.offer_history.push(offerRecord);
+        currentStats.lastUpdated = new Date().toISOString();
+
+        // Build comprehensive JSON payload for StreamElements widgets
+        const offerDataJSON = {
+            appName,
+            merchant,
+            pay: `$${pay}`,
+            miles: miles,
+            theme: {
+                primaryColor: theme.color,
+                logo: theme.logoFilename
+            },
+            updatedAt: currentStats.lastUpdated
+        };
+
+        // Batch upload files to Dropbox
         const uploadPromises = [
+            // Current Offer Text Files
             uploadToDropbox('merchant_name.txt', merchant),
             uploadToDropbox('current_offer.txt', `$${pay}`),
-            uploadToDropbox('offer_miles.txt', miles)
+            uploadToDropbox('offer_miles.txt', miles),
+            uploadToDropbox('app_name.txt', appName),
+            uploadToDropbox('app_color.txt', theme.color),
+            uploadToDropbox('offer_data.json', JSON.stringify(offerDataJSON, null, 2)),
+
+            // Running Shift Totals
+            uploadToDropbox('total.txt', `$${newGrandTotal}`),
+            uploadToDropbox('miles.txt', newTotalMiles),
+            uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2))
         ];
 
-        if (tip > 0) {
-            let currentStats = await getShiftStatsFromDropbox();
-
-            const updatedAppTips = (parseFloat(currentStats.app_tips || 0) + tip).toFixed(2);
-            const updatedGrandTotal = (parseFloat(currentStats.grand_total || 0) + tip).toFixed(2);
-
-            currentStats.app_tips = updatedAppTips;
-            currentStats.grand_total = updatedGrandTotal;
-            currentStats.lastUpdated = new Date().toISOString();
-
-            uploadPromises.push(uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2)));
-            uploadPromises.push(uploadToDropbox('doordash_tips.txt', updatedAppTips));
-            uploadPromises.push(uploadToDropbox('total.txt', updatedGrandTotal));
+        if (tipNum > 0) {
+            uploadPromises.push(uploadToDropbox('doordash_tips.txt', currentStats.app_tips));
         }
 
         await Promise.all(uploadPromises);
 
+        // Sync logo image on Dropbox asynchronously
+        copyDropboxLogo(theme.logoFilename);
+
         res.json({
             status: 'success',
-            data: { appName, merchant, pay, miles, tip }
+            data: { appName, merchant, pay: `$${pay}`, miles, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
         });
 
     } catch (err) {
         console.error('AI Offer Parsing Error Detail:', err.message || err);
         res.status(500).json({ error: 'Failed to parse offer card screenshot', details: err.message });
+    }
+});
+
+// =========================================================================
+// REMOVE LAST OFFER ENDPOINT (/remove-offer)
+// =========================================================================
+app.post('/remove-offer', async (req, res) => {
+    try {
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (!currentStats.offer_history || currentStats.offer_history.length === 0) {
+            return res.json({
+                status: 'error',
+                message: 'No recent offer found in history to remove.'
+            });
+        }
+
+        // Pop last accepted offer from history stack
+        const lastOffer = currentStats.offer_history.pop();
+
+        // Read current running totals
+        let existingGrandTotal = await readDropboxFloat('/total.txt', parseFloat(currentStats.grand_total || 0));
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', parseFloat(currentStats.total_miles || 0));
+
+        // Deduct last offer metrics (ensuring totals don't dip below 0)
+        let newGrandTotal = Math.max(0, existingGrandTotal - lastOffer.pay).toFixed(2);
+        let newTotalMiles = Math.max(0, existingTotalMiles - lastOffer.miles).toFixed(1);
+
+        currentStats.grand_total = newGrandTotal;
+        currentStats.total_miles = newTotalMiles;
+        if (lastOffer.tip > 0) {
+            currentStats.app_tips = Math.max(0, parseFloat(currentStats.app_tips || 0) - lastOffer.tip).toFixed(2);
+        }
+        currentStats.lastUpdated = new Date().toISOString();
+
+        // Update Dropbox text files and state
+        const uploadPromises = [
+            uploadToDropbox('current_offer.txt', '$0.00'),
+            uploadToDropbox('offer_miles.txt', '0.0'),
+            uploadToDropbox('merchant_name.txt', '[CANCELED]'),
+            uploadToDropbox('total.txt', `$${newGrandTotal}`),
+            uploadToDropbox('miles.txt', newTotalMiles),
+            uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2))
+        ];
+
+        await Promise.all(uploadPromises);
+
+        res.json({
+            status: 'success',
+            message: `Removed $${lastOffer.pay.toFixed(2)} / ${lastOffer.miles} mi (${lastOffer.merchant})`,
+            data: {
+                removedOffer: lastOffer,
+                newGrandTotal: `$${newGrandTotal}`,
+                newTotalMiles
+            }
+        });
+
+    } catch (err) {
+        console.error('Remove Offer Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to remove last offer', details: err.message });
     }
 });
 
@@ -415,7 +554,7 @@ app.post('/add-tip', async (req, res) => {
         await Promise.all([
             uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2)),
             uploadToDropbox('doordash_tips.txt', updatedAppTips),
-            uploadToDropbox('total.txt', updatedGrandTotal)
+            uploadToDropbox('total.txt', `$${updatedGrandTotal}`)
         ]);
 
         res.json({
@@ -423,7 +562,7 @@ app.post('/add-tip', async (req, res) => {
             data: {
                 app_tips: updatedAppTips,
                 stream_tips: currentStats.stream_tips || "0.00",
-                grand_total: updatedGrandTotal
+                grand_total: `$${updatedGrandTotal}`
             }
         });
 
