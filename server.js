@@ -57,7 +57,7 @@ async function getShiftStatsFromDropbox() {
     }
 }
 
-const MILEAGE_RATE = 0.725; // 2026 IRS Rate
+const MILEAGE_RATE = 0.725; // IRS Rate
 
 // PERSISTENT SERVER STATE STORAGE
 let shortcutStartMiles = null;
@@ -319,8 +319,8 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        // Updated active model name
-        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+        // Updated model string requested by Google API response
+        const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
