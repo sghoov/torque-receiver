@@ -319,8 +319,8 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        // Updated supported active model name
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-8b' });
+        // Updated active model name
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
