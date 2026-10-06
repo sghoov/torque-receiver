@@ -14,17 +14,47 @@ const { GoogleGenerativeAI } = require('@google/generative-ai');
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
-// External API Clients
-const dbx = new Dropbox({ accessToken: process.env.DROPBOX_ACCESS_TOKEN || '' });
+// External API Clients - Updated to Permanent Refresh Token Auth
+const dbx = new Dropbox({
+    clientId: process.env.DROPBOX_APP_KEY,
+    clientSecret: process.env.DROPBOX_APP_SECRET,
+    refreshToken: process.env.DROPBOX_REFRESH_TOKEN,
+    fetch: fetch // Native fetch in Node 18+
+});
+
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
 
 async function uploadToDropbox(filename, content) {
-    if (!process.env.DROPBOX_ACCESS_TOKEN) return;
-    return dbx.filesUpload({
-        path: '/' + filename,
-        contents: content,
-        mode: { '.tag': 'overwrite' }
-    });
+    if (!process.env.DROPBOX_REFRESH_TOKEN) return;
+    try {
+        return await dbx.filesUpload({
+            path: '/' + filename,
+            contents: content,
+            mode: { '.tag': 'overwrite' }
+        });
+    } catch (err) {
+        console.error(`[Dropbox Upload Error - ${filename}]:`, err.status || err.message);
+    }
+}
+
+// Helper to safely fetch shift_stats.json using Buffer parsing
+async function getShiftStatsFromDropbox() {
+    let defaultStats = { app_tips: "0.00", stream_tips: "0.00", grand_total: "0.00" };
+    try {
+        const fileDownload = await dbx.filesDownload({ path: '/shift_stats.json' });
+        
+        let contents;
+        if (fileDownload.result.fileBinary) {
+            contents = Buffer.from(fileDownload.result.fileBinary).toString('utf-8');
+        } else {
+            contents = fileDownload.result.fileBinary;
+        }
+
+        return JSON.parse(contents);
+    } catch (e) {
+        console.log('shift_stats.json not found on Dropbox or failed to read, initializing fresh state...');
+        return defaultStats;
+    }
 }
 
 const MILEAGE_RATE = 0.725; // 2026 IRS Rate
@@ -324,14 +354,7 @@ Rules:
         ];
 
         if (tip > 0) {
-            let currentStats = { app_tips: "0.00", stream_tips: "0.00", grand_total: "0.00" };
-            try {
-                const fileDownload = await dbx.filesDownload({ path: '/shift_stats.json' });
-                const jsonBuffer = fileDownload.result.fileBinary;
-                currentStats = JSON.parse(jsonBuffer.toString('utf8'));
-            } catch (e) {
-                console.log('shift_stats.json not found, initializing fresh state...');
-            }
+            let currentStats = await getShiftStatsFromDropbox();
 
             const updatedAppTips = (parseFloat(currentStats.app_tips || 0) + tip).toFixed(2);
             const updatedGrandTotal = (parseFloat(currentStats.grand_total || 0) + tip).toFixed(2);
@@ -370,14 +393,7 @@ app.post('/add-tip', async (req, res) => {
             return res.status(400).json({ error: 'Invalid tip amount' });
         }
 
-        let currentStats = { app_tips: "0.00", stream_tips: "0.00", grand_total: "0.00" };
-        try {
-            const fileDownload = await dbx.filesDownload({ path: '/shift_stats.json' });
-            const jsonBuffer = fileDownload.result.fileBinary;
-            currentStats = JSON.parse(jsonBuffer.toString('utf8'));
-        } catch (e) {
-            console.log('shift_stats.json not found, creating new file...');
-        }
+        let currentStats = await getShiftStatsFromDropbox();
 
         const updatedAppTips = (parseFloat(currentStats.app_tips || 0) + tipAmount).toFixed(2);
         const updatedGrandTotal = (parseFloat(currentStats.grand_total || 0) + tipAmount).toFixed(2);
