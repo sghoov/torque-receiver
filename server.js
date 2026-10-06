@@ -34,17 +34,29 @@ const APP_THEMES = {
     "Roadie": { color: "#C02823", logoFilename: "roadie logo.png" }
 };
 
-async function uploadToDropbox(filename, content) {
+// Rate-limit resistant upload helper with exponential backoff retry logic
+async function uploadToDropbox(filename, content, retries = 3, delay = 400) {
     if (!process.env.DROPBOX_REFRESH_TOKEN) return;
-    try {
-        const cleanPath = filename.startsWith('/') ? filename : '/' + filename;
-        return await dbx.filesUpload({
-            path: cleanPath,
-            contents: String(content),
-            mode: { '.tag': 'overwrite' }
-        });
-    } catch (err) {
-        console.error(`[Dropbox Upload Error - ${filename}]:`, err.status || err.message);
+    const cleanPath = filename.startsWith('/') ? filename : '/' + filename;
+    
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            return await dbx.filesUpload({
+                path: cleanPath,
+                contents: String(content),
+                mode: { '.tag': 'overwrite' }
+            });
+        } catch (err) {
+            const status = err.status || (err.error && err.error.status);
+            if ((status === 429 || status === 409) && attempt < retries) {
+                console.warn(`[Dropbox ${status} - ${filename}] Retrying attempt ${attempt}/${retries} in ${delay}ms...`);
+                await new Promise(res => setTimeout(res, delay));
+                delay *= 2; // Exponential backoff
+            } else {
+                console.error(`[Dropbox Upload Error - ${filename}]:`, status || err.message);
+                break;
+            }
+        }
     }
 }
 
@@ -92,7 +104,7 @@ async function getShiftStatsFromDropbox() {
     }
 }
 
-// Helper to safely read a floating-point value from Dropbox file or fallback to stats
+// Helper to safely read a floating-point value from Dropbox file or default to 0
 async function readDropboxFloat(filePath, defaultValue = 0.0) {
     try {
         const cleanPath = filePath.startsWith('/') ? filePath : '/' + filePath;
@@ -350,7 +362,6 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        // Restored original working model string
         const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
 
         const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
@@ -411,6 +422,14 @@ Rules:
         // Update shift stats object
         currentStats.grand_total = newGrandTotal;
         currentStats.total_miles = newTotalMiles;
+        currentStats.last_offer = {
+            appName,
+            merchant,
+            pay: `$${pay}`,
+            miles,
+            themeColor: theme.color,
+            logoFilename: theme.logoFilename
+        };
         if (tipNum > 0) {
             currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
         }
@@ -428,44 +447,23 @@ Rules:
         currentStats.offer_history.push(offerRecord);
         currentStats.lastUpdated = new Date().toISOString();
 
-        // Build comprehensive JSON payload for StreamElements widgets
-        const offerDataJSON = {
-            appName,
-            merchant,
-            pay: `$${pay}`,
-            miles: miles,
-            theme: {
-                primaryColor: theme.color,
-                logo: theme.logoFilename
-            },
-            updatedAt: currentStats.lastUpdated
-        };
-
-        // Batch upload files to Dropbox - synchronized both miles.txt and mile.txt
-        const uploadPromises = [
-            // Current Offer Text Files
-            uploadToDropbox('merchant_name.txt', merchant),
-            uploadToDropbox('current_offer.txt', `$${pay}`),
-            uploadToDropbox('offer_miles.txt', miles),
-            uploadToDropbox('app_name.txt', appName),
-            uploadToDropbox('app_color.txt', theme.color),
-            uploadToDropbox('offer_data.json', JSON.stringify(offerDataJSON, null, 2)),
-
-            // Running Shift Totals (Synchronized both miles.txt and mile.txt)
-            uploadToDropbox('total.txt', `$${newGrandTotal}`),
-            uploadToDropbox('miles.txt', newTotalMiles),
-            uploadToDropbox('mile.txt', newTotalMiles),
-            uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2))
+        // Streamlined files array (5 core text files + 1 JSON state)
+        const filesToUpload = [
+            { name: 'current_offer.txt', content: `$${pay}` },
+            { name: 'offer_miles.txt', content: miles },
+            { name: 'merchant_name.txt', content: merchant },
+            { name: 'total.txt', content: `$${newGrandTotal}` },
+            { name: 'miles.txt', content: newTotalMiles },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
-        if (tipNum > 0) {
-            uploadPromises.push(uploadToDropbox('doordash_tips.txt', currentStats.app_tips));
+        // Sequential uploads prevent hitting Dropbox 429 rate limits
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
         }
 
-        await Promise.all(uploadPromises);
-
-        // Sync logo image on Dropbox asynchronously
-        copyDropboxLogo(theme.logoFilename);
+        // Sync logo image on Dropbox sequentially
+        await copyDropboxLogo(theme.logoFilename);
 
         res.json({
             status: 'success',
@@ -513,18 +511,19 @@ app.post('/remove-offer', async (req, res) => {
         }
         currentStats.lastUpdated = new Date().toISOString();
 
-        // Update Dropbox text files and state
-        const uploadPromises = [
-            uploadToDropbox('current_offer.txt', '$0.00'),
-            uploadToDropbox('offer_miles.txt', '0.0'),
-            uploadToDropbox('merchant_name.txt', '[CANCELED]'),
-            uploadToDropbox('total.txt', `$${newGrandTotal}`),
-            uploadToDropbox('miles.txt', newTotalMiles),
-            uploadToDropbox('mile.txt', newTotalMiles),
-            uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2))
+        // Streamlined rollback upload array
+        const filesToUpload = [
+            { name: 'current_offer.txt', content: '$0.00' },
+            { name: 'offer_miles.txt', content: '0.0' },
+            { name: 'merchant_name.txt', content: '[CANCELED]' },
+            { name: 'total.txt', content: `$${newGrandTotal}` },
+            { name: 'miles.txt', content: newTotalMiles },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
-        await Promise.all(uploadPromises);
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
 
         res.json({
             status: 'success',
@@ -563,11 +562,14 @@ app.post('/add-tip', async (req, res) => {
         currentStats.grand_total = updatedGrandTotal;
         currentStats.lastUpdated = new Date().toISOString();
 
-        await Promise.all([
-            uploadToDropbox('shift_stats.json', JSON.stringify(currentStats, null, 2)),
-            uploadToDropbox('doordash_tips.txt', updatedAppTips),
-            uploadToDropbox('total.txt', `$${updatedGrandTotal}`)
-        ]);
+        const filesToUpload = [
+            { name: 'total.txt', content: `$${updatedGrandTotal}` },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
 
         res.json({
             status: 'success',
