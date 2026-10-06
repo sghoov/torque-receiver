@@ -63,11 +63,17 @@ async function uploadToDropbox(filename, content, retries = 3, delay = 400) {
 async function copyDropboxLogo(sourceLogoFilename) {
     if (!process.env.DROPBOX_REFRESH_TOKEN || !sourceLogoFilename) return;
     try {
+        // Delete existing logo to prevent 409 conflict error on copy
+        try {
+            await dbx.filesDeleteV2({ path: '/gig logo.png' });
+        } catch (delErr) {
+            // Ignore error if /gig logo.png doesn't exist yet
+        }
+
         await dbx.filesCopyV2({
             from_path: '/logos/' + sourceLogoFilename,
             to_path: '/gig logo.png',
-            autorename: false,
-            mode: { '.tag': 'overwrite' }
+            autorename: false
         });
         console.log(`[Dropbox Logo Sync] Successfully copied /logos/${sourceLogoFilename} -> /gig logo.png`);
     } catch (err) {
@@ -149,6 +155,48 @@ app.get('/', (req, res) => {
 
 app.get('/current-city', (req, res) => {
     res.json({ lat: currentLat, lon: currentLon });
+});
+
+// Dedicated Shift Reset Route for Starting a New Stream/Day
+app.get('/reset-shift', async (req, res) => {
+    try {
+        let freshStats = { 
+            app_tips: "0.00", 
+            stream_tips: "0.00", 
+            grand_total: "0.00",
+            total_miles: "0.0",
+            offer_history: [],
+            lastUpdated: new Date().toISOString()
+        };
+
+        const resetFiles = [
+            { name: 'current_offer.txt', content: '$0.00' },
+            { name: 'offer_miles.txt', content: '0.0' },
+            { name: 'merchant_name.txt', content: 'READY' },
+            { name: 'total.txt', content: '$0.00' },
+            { name: 'miles.txt', content: '0.0' },
+            { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
+        ];
+
+        for (const file of resetFiles) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        // Reset server-side telemetry baselines
+        accumulatedTerrainAdjustmentMiles = 0.0;
+        lastKnownAltitudeMeters = null;
+        savedPreviousTripsMiles = 0.0;
+        lastKnownRawMiles = 0.0;
+        shiftStartTime = null;
+
+        io.emit('shift_reset');
+
+        console.log('[Shift Reset] Shift totals and telemetry successfully cleared.');
+        res.json({ status: 'success', message: 'Shift stats reset to $0.00 and 0.0 miles!' });
+    } catch (err) {
+        console.error('Reset Shift Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to reset shift', details: err.message });
+    }
 });
 
 app.get('/update-range', (req, res) => {
@@ -462,7 +510,7 @@ Rules:
             await uploadToDropbox(file.name, file.content);
         }
 
-        // Sync logo image on Dropbox sequentially
+        // Sync logo image on Dropbox sequentially (Deletes existing first to prevent 409 conflict)
         await copyDropboxLogo(theme.logoFilename);
 
         res.json({
