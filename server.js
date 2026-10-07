@@ -90,6 +90,10 @@ async function getShiftStatsFromDropbox() {
     let defaultStats = { 
         app_tips: "0.00", 
         stream_tips: "0.00", 
+        other_donations: "0.00",
+        superchats: "0.00",
+        jewels: 0,
+        subs: 0,
         grand_total: "0.00",
         total_miles: "0.0",
         offer_history: [] 
@@ -107,6 +111,11 @@ async function getShiftStatsFromDropbox() {
         const stats = JSON.parse(contents);
         if (!stats.offer_history) stats.offer_history = [];
         if (!stats.total_miles) stats.total_miles = "0.0";
+        if (!stats.app_tips) stats.app_tips = "0.00";
+        if (!stats.other_donations) stats.other_donations = "0.00";
+        if (!stats.superchats) stats.superchats = "0.00";
+        if (!stats.jewels) stats.jewels = 0;
+        if (!stats.subs) stats.subs = 0;
         return stats;
     } catch (e) {
         console.log('shift_stats.json not found on Dropbox or failed to read, initializing fresh state...');
@@ -161,42 +170,51 @@ app.get('/current-city', (req, res) => {
     res.json({ lat: currentLat, lon: currentLon });
 });
 
+// Helper function to perform a full shift wipe
+async function executeShiftReset() {
+    let freshStats = { 
+        app_tips: "0.00", 
+        stream_tips: "0.00", 
+        other_donations: "0.00",
+        superchats: "0.00",
+        jewels: 0,
+        subs: 0,
+        grand_total: "0.00",
+        total_miles: "0.0",
+        offer_history: [],
+        lastUpdated: new Date().toISOString()
+    };
+
+    const resetFiles = [
+        { name: 'current_offer.txt', content: '\$0.00' },
+        { name: 'offer_miles.txt', content: '0.0' },
+        { name: 'merchant_name.txt', content: 'READY' },
+        { name: 'total.txt', content: '\$0.00' },
+        { name: 'miles.txt', content: '0.0' },
+        { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
+    ];
+
+    for (const file of resetFiles) {
+        await uploadToDropbox(file.name, file.content);
+    }
+
+    // Reset server-side telemetry baselines
+    accumulatedTerrainAdjustmentMiles = 0.0;
+    lastKnownAltitudeMeters = null;
+    savedPreviousTripsMiles = 0.0;
+    lastKnownRawMiles = 0.0;
+    shiftStartTime = null;
+
+    io.emit('shift_reset');
+    return freshStats;
+}
+
 // Dedicated Shift Reset Route for Starting a New Stream/Day
 app.get('/reset-shift', async (req, res) => {
     try {
-        let freshStats = { 
-            app_tips: "0.00", 
-            stream_tips: "0.00", 
-            grand_total: "0.00",
-            total_miles: "0.0",
-            offer_history: [],
-            lastUpdated: new Date().toISOString()
-        };
-
-        const resetFiles = [
-            { name: 'current_offer.txt', content: '$0.00' },
-            { name: 'offer_miles.txt', content: '0.0' },
-            { name: 'merchant_name.txt', content: 'READY' },
-            { name: 'total.txt', content: '$0.00' },
-            { name: 'miles.txt', content: '0.0' },
-            { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
-        ];
-
-        for (const file of resetFiles) {
-            await uploadToDropbox(file.name, file.content);
-        }
-
-        // Reset server-side telemetry baselines
-        accumulatedTerrainAdjustmentMiles = 0.0;
-        lastKnownAltitudeMeters = null;
-        savedPreviousTripsMiles = 0.0;
-        lastKnownRawMiles = 0.0;
-        shiftStartTime = null;
-
-        io.emit('shift_reset');
-
+        await executeShiftReset();
         console.log('[Shift Reset] Shift totals and telemetry successfully cleared.');
-        res.json({ status: 'success', message: 'Shift stats reset to $0.00 and 0.0 miles!' });
+        res.json({ status: 'success', message: 'Shift stats reset to \$0.00 and 0.0 miles!' });
     } catch (err) {
         console.error('Reset Shift Error:', err.message || err);
         res.status(500).json({ error: 'Failed to reset shift', details: err.message });
@@ -388,7 +406,7 @@ app.get('/live', async (req, res) => {
             actualSessionMilesRaw: trueSessionMiles,
             shiftSeconds: shiftDurationSeconds,
             rawSpeed: speedMph,
-            tax: "$" + taxSaved.toFixed(2)
+            tax: "\$" + taxSaved.toFixed(2)
         };
 
         io.emit('telemetry_update', telemetryData);
@@ -565,7 +583,7 @@ app.post('/remove-offer', async (req, res) => {
 
         // Streamlined rollback upload array
         const filesToUpload = [
-            { name: 'current_offer.txt', content: '$0.00' },
+            { name: 'current_offer.txt', content: '\$0.00' },
             { name: 'offer_miles.txt', content: '0.0' },
             { name: 'merchant_name.txt', content: '[CANCELED]' },
             { name: 'total.txt', content: `$${newGrandTotal}` },
@@ -635,6 +653,116 @@ app.post('/add-tip', async (req, res) => {
     } catch (err) {
         console.error('Add Tip Error:', err);
         res.status(500).json({ error: 'Failed to record tip' });
+    }
+});
+
+// =========================================================================
+// PAPA GIGS TOTE BOARD API ENDPOINTS
+// =========================================================================
+
+// 1. Fetch live tote board stats with CORS & per-app calculation
+app.get('/api/toteboard', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+
+    try {
+        let stats = await getShiftStatsFromDropbox();
+        
+        // Dynamically compute per-app breakdown from offer_history
+        let appsBreakdown = {
+            "DoorDash": 0,
+            "Uber Eats": 0,
+            "Instacart": 0,
+            "Amazon Flex": 0,
+            "Shipt": 0,
+            "Roadie": 0
+        };
+
+        if (Array.isArray(stats.offer_history)) {
+            stats.offer_history.forEach(offer => {
+                const name = offer.appName || 'Other';
+                const pay = parseFloat(offer.pay || 0);
+                if (appsBreakdown.hasOwnProperty(name)) {
+                    appsBreakdown[name] += pay;
+                } else {
+                    appsBreakdown[name] = pay;
+                }
+            });
+        }
+
+        res.json({
+            gross_earnings: parseFloat(stats.grand_total || 0),
+            miles: parseFloat(stats.total_miles || 0),
+            app_tips: parseFloat(stats.app_tips || 0),
+            other_donations: parseFloat(stats.other_donations || 0),
+            superchats: parseFloat(stats.superchats || 0),
+            jewels: parseInt(stats.jewels || 0),
+            subs: parseInt(stats.subs || 0),
+            apps_breakdown: appsBreakdown,
+            offer_history: stats.offer_history || [],
+            last_updated: stats.lastUpdated || new Date().toISOString()
+        });
+    } catch (err) {
+        console.error('Tote board stats fetch error:', err);
+        res.status(500).json({ error: 'Failed to fetch tote board metrics' });
+    }
+});
+
+// 2. Add manual tips/donations via iOS Shortcut or API
+app.post('/api/toteboard/add-donation', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const { type, amount } = req.body; // type: "app_tip" or "other"
+        const addAmount = parseFloat(amount || 0);
+
+        if (isNaN(addAmount) || addAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid donation amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (type === 'app_tip') {
+            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
+        } else {
+            currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
+        }
+
+        currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'total.txt', content: `$${currentStats.grand_total}` },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                app_tips: currentStats.app_tips,
+                other_donations: currentStats.other_donations,
+                grand_total: currentStats.grand_total
+            }
+        });
+    } catch (err) {
+        console.error('Tote board add donation error:', err);
+        res.status(500).json({ error: 'Failed to add donation' });
+    }
+});
+
+// 3. Reset tote board totals
+app.post('/api/toteboard/reset', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const resetStats = await executeShiftReset();
+        console.log('[Tote Board Reset] Successfully reset all totals');
+        res.json({ status: 'success', data: resetStats });
+    } catch (err) {
+        console.error('Tote board reset error:', err);
+        res.status(500).json({ error: 'Failed to reset tote board' });
     }
 });
 
