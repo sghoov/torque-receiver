@@ -60,22 +60,26 @@ async function uploadToDropbox(filename, content, retries = 3, delay = 400) {
     }
 }
 
+// In-place byte copy to overwrite /gig logo.png without deleting it (preserves Shared Link URL!)
 async function copyDropboxLogo(sourceLogoFilename) {
     if (!process.env.DROPBOX_REFRESH_TOKEN || !sourceLogoFilename) return;
     try {
-        // Delete existing logo to prevent 409 conflict error on copy
-        try {
-            await dbx.filesDeleteV2({ path: '/gig logo.png' });
-        } catch (delErr) {
-            // Ignore error if /gig logo.png doesn't exist yet
+        const fileDownload = await dbx.filesDownload({ path: '/logos/' + sourceLogoFilename });
+        
+        let logoBuffer;
+        if (fileDownload.result.fileBinary) {
+            logoBuffer = fileDownload.result.fileBinary;
+        } else {
+            logoBuffer = Buffer.from(fileDownload.result.fileBinary);
         }
 
-        await dbx.filesCopyV2({
-            from_path: '/logos/' + sourceLogoFilename,
-            to_path: '/gig logo.png',
-            autorename: false
+        await dbx.filesUpload({
+            path: '/gig logo.png',
+            contents: logoBuffer,
+            mode: { '.tag': 'overwrite' }
         });
-        console.log(`[Dropbox Logo Sync] Successfully copied /logos/${sourceLogoFilename} -> /gig logo.png`);
+        
+        console.log(`[Dropbox Logo Sync] Overwrote /gig logo.png in-place with /logos/${sourceLogoFilename}`);
     } catch (err) {
         console.error(`[Dropbox Logo Copy Error]:`, err.status || err.message);
     }
@@ -510,7 +514,7 @@ Rules:
             await uploadToDropbox(file.name, file.content);
         }
 
-        // Sync logo image on Dropbox sequentially (Deletes existing first to prevent 409 conflict)
+        // Overwrite /gig logo.png in-place (Preserves File ID & Shared Link URL)
         await copyDropboxLogo(theme.logoFilename);
 
         res.json({
