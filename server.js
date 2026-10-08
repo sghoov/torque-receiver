@@ -172,7 +172,7 @@ app.get('/current-city', (req, res) => {
     res.json({ lat: currentLat, lon: currentLon });
 });
 
-// Helper function to perform a full shift wipe (Only called when explicitly requested)
+// Helper function to perform a full shift wipe
 async function executeShiftReset() {
     let freshStats = { 
         app_tips: "0.00", 
@@ -204,7 +204,7 @@ async function executeShiftReset() {
     return freshStats;
 }
 
-// Full Shift Reset Route (Clears both telemetry & tote board)
+// Full Shift Reset Route (Clears telemetry & tote board)
 app.get('/reset-shift', async (req, res) => {
     try {
         await executeShiftReset();
@@ -707,8 +707,8 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
         let currentStats = await getShiftStatsFromDropbox();
 
         if (type === 'app_tip') {
+            // Update In-App Tips line ONLY - do NOT add to grand_total again!
             currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
-            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
         } else if (type === 'superchat') {
             currentStats.superchats = (parseFloat(currentStats.superchats || 0) + addAmount).toFixed(2);
             currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
@@ -718,6 +718,7 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
             currentStats.members = (parseInt(currentStats.members || 0) + parseInt(addAmount));
             currentStats.subs = currentStats.members;
         } else {
+            // Cash / Buy Me A Coffee / Stream Tips - Add to grand_total
             currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
             currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
         }
