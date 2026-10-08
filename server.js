@@ -114,8 +114,8 @@ async function getShiftStatsFromDropbox() {
         if (!stats.app_tips) stats.app_tips = "0.00";
         if (!stats.other_donations) stats.other_donations = "0.00";
         if (!stats.superchats) stats.superchats = "0.00";
-        if (!stats.jewels) stats.jewels = 0;
-        if (!stats.subs) stats.subs = 0;
+        if (stats.jewels === undefined) stats.jewels = 0;
+        if (stats.subs === undefined) stats.subs = 0;
         return stats;
     } catch (e) {
         console.log('shift_stats.json not found on Dropbox or failed to read, initializing fresh state...');
@@ -703,70 +703,4 @@ app.get('/api/toteboard', async (req, res) => {
             last_updated: stats.lastUpdated || new Date().toISOString()
         });
     } catch (err) {
-        console.error('Tote board stats fetch error:', err);
-        res.status(500).json({ error: 'Failed to fetch tote board metrics' });
-    }
-});
-
-// 2. Add manual tips/donations via iOS Shortcut or API
-app.post('/api/toteboard/add-donation', async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    try {
-        const { type, amount } = req.body; // type: "app_tip" or "other"
-        const addAmount = parseFloat(amount || 0);
-
-        if (isNaN(addAmount) || addAmount <= 0) {
-            return res.status(400).json({ error: 'Invalid donation amount' });
-        }
-
-        let currentStats = await getShiftStatsFromDropbox();
-
-        if (type === 'app_tip') {
-            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
-        } else {
-            currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
-        }
-
-        currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
-        currentStats.lastUpdated = new Date().toISOString();
-
-        const filesToUpload = [
-            { name: 'total.txt', content: `$${currentStats.grand_total}` },
-            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
-        ];
-
-        for (const file of filesToUpload) {
-            await uploadToDropbox(file.name, file.content);
-        }
-
-        res.json({
-            status: 'success',
-            data: {
-                app_tips: currentStats.app_tips,
-                other_donations: currentStats.other_donations,
-                grand_total: currentStats.grand_total
-            }
-        });
-    } catch (err) {
-        console.error('Tote board add donation error:', err);
-        res.status(500).json({ error: 'Failed to add donation' });
-    }
-});
-
-// 3. Reset tote board totals
-app.post('/api/toteboard/reset', async (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    try {
-        const resetStats = await executeShiftReset();
-        console.log('[Tote Board Reset] Successfully reset all totals');
-        res.json({ status: 'success', data: resetStats });
-    } catch (err) {
-        console.error('Tote board reset error:', err);
-        res.status(500).json({ error: 'Failed to reset tote board' });
-    }
-});
-
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+        console.error
