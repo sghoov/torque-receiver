@@ -19,7 +19,7 @@ const dbx = new Dropbox({
     clientId: process.env.DROPBOX_APP_KEY,
     clientSecret: process.env.DROPBOX_APP_SECRET,
     refreshToken: process.env.DROPBOX_REFRESH_TOKEN,
-    fetch: fetch // Native fetch in Node 18+
+    fetch: fetch
 });
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
@@ -51,7 +51,7 @@ async function uploadToDropbox(filename, content, retries = 3, delay = 400) {
             if ((status === 429 || status === 409) && attempt < retries) {
                 console.warn(`[Dropbox ${status} - ${filename}] Retrying attempt ${attempt}/${retries} in ${delay}ms...`);
                 await new Promise(res => setTimeout(res, delay));
-                delay *= 2; // Exponential backoff
+                delay *= 2;
             } else {
                 console.error(`[Dropbox Upload Error - ${filename}]:`, status || err.message);
                 break;
@@ -60,7 +60,7 @@ async function uploadToDropbox(filename, content, retries = 3, delay = 400) {
     }
 }
 
-// In-place byte copy to overwrite /gig logo.png without deleting it (preserves Shared Link URL!)
+// In-place byte copy to overwrite /gig logo.png without deleting it
 async function copyDropboxLogo(sourceLogoFilename) {
     if (!process.env.DROPBOX_REFRESH_TOKEN || !sourceLogoFilename) return;
     try {
@@ -137,7 +137,7 @@ async function readDropboxFloat(filePath, defaultValue = 0.0) {
     }
 }
 
-const MILEAGE_RATE = 0.725; // IRS Rate
+const MILEAGE_RATE = 0.725;
 
 // PERSISTENT SERVER STATE STORAGE
 let shortcutStartMiles = null;
@@ -158,7 +158,7 @@ let shiftStartTime = null;
 let savedPreviousTripsMiles = 0.0;
 let lastKnownRawMiles = 0.0;
 
-// STICKY GPS STORAGE: Default to Pacifica
+// STICKY GPS STORAGE
 let currentLat = 37.6017; 
 let currentLon = -122.4868;
 
@@ -198,7 +198,6 @@ async function executeShiftReset() {
         await uploadToDropbox(file.name, file.content);
     }
 
-    // Reset server-side telemetry baselines
     accumulatedTerrainAdjustmentMiles = 0.0;
     lastKnownAltitudeMeters = null;
     savedPreviousTripsMiles = 0.0;
@@ -209,7 +208,7 @@ async function executeShiftReset() {
     return freshStats;
 }
 
-// Dedicated Shift Reset Route for Starting a New Stream/Day
+// Dedicated Shift Reset Route
 app.get('/reset-shift', async (req, res) => {
     try {
         await executeShiftReset();
@@ -223,13 +222,12 @@ app.get('/reset-shift', async (req, res) => {
 
 app.get('/update-range', (req, res) => {
     try {
-        // 1. FULL SHIFT RESET (New Day / New Stream)
         if (req.query.fullReset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
             savedPreviousTripsMiles = 0.0;
             lastKnownRawMiles = 0.0;
-            shiftStartTime = null; // Resets shift timer back to 0:00
+            shiftStartTime = null;
             rangeDistanceBaseline = latestRawDistanceMiles;
             sessionMilesBaseline = latestRawDistanceMiles;
 
@@ -239,15 +237,13 @@ app.get('/update-range', (req, res) => {
                 maxRangeInput: shortcutMaxRange !== null ? shortcutMaxRange : 70
             });
 
-            console.log(`[Shift Reset] Full stream shift clock, miles, and range reset executed.`);
-            return res.send(`Success: Full shift clock, session miles, and range reset to 0!`);
+            console.log('[Shift Reset] Full stream shift clock, miles, and range reset executed.');
+            return res.send('Success: Full shift clock, session miles, and range reset to 0!');
         }
 
-        // 2. MID-STREAM CHARGE RESET
         if (req.query.reset === 'true') {
             accumulatedTerrainAdjustmentMiles = 0.0;
             lastKnownAltitudeMeters = null;
-            
             rangeDistanceBaseline = latestRawDistanceMiles;
 
             io.emit('manual_range_update', {
@@ -256,7 +252,7 @@ app.get('/update-range', (req, res) => {
             });
 
             console.log(`[Battery Charge Reset] Range baseline set to: ${rangeDistanceBaseline.toFixed(2)} mi`);
-            return res.send(`Success: Range bar reset to 70mi! (Shift time & total miles kept intact)`);
+            return res.send('Success: Range bar reset to 70mi!');
         }
 
         let parsedStart = parseFloat(req.query.startMiles);
@@ -448,8 +444,8 @@ Extract the following details and return ONLY a valid JSON object with no markdo
 
 Rules:
 1. "pay" is the total earnings payout shown on the offer card.
-2. "tip" is the explicit tip amount if broken down on the card (e.g., Instacart tip line item). If no tip is broken down separately, set "tip" to 0.00.
-3. "merchant" is the pickup store/restaurant (e.g., "Costco", "McDonald's", "Safeway", "Amazon DSH1"). If unknown, set to "DELIVERY OFFER".`;
+2. "tip" is the explicit tip amount if broken down on the card. If no tip is broken down separately, set "tip" to 0.00.
+3. "merchant" is the pickup store/restaurant. If unknown, set to "DELIVERY OFFER".`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -457,7 +453,7 @@ Rules:
 
         const jsonMatch = responseText.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {
-            throw new Error(`Gemini response did not contain JSON: ${responseText}`);
+            throw new Error('Gemini response did not contain JSON');
         }
 
         const parsedData = JSON.parse(jsonMatch[0]);
@@ -471,25 +467,19 @@ Rules:
         const pay = payNum.toFixed(2);
         const miles = milesNum.toFixed(1);
 
-        // Fetch theme metadata (color & logo)
         const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
 
-        // Fetch current stats from Dropbox JSON
         let currentStats = await getShiftStatsFromDropbox();
 
-        // Safe Fallback Base Numbers from current JSON state
         let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
         let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
 
-        // Read direct file values with JSON fallback
         let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
         let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
 
-        // Add current accepted offer to totals
         let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
         let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
 
-        // Update shift stats object
         currentStats.grand_total = newGrandTotal;
         currentStats.total_miles = newTotalMiles;
         currentStats.last_offer = {
@@ -504,7 +494,6 @@ Rules:
             currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
         }
 
-        // Add to history stack for rollback capability
         const offerRecord = {
             id: Date.now(),
             appName,
@@ -517,7 +506,6 @@ Rules:
         currentStats.offer_history.push(offerRecord);
         currentStats.lastUpdated = new Date().toISOString();
 
-        // Streamlined files array (5 core text files + 1 JSON state)
         const filesToUpload = [
             { name: 'current_offer.txt', content: `$${pay}` },
             { name: 'offer_miles.txt', content: miles },
@@ -527,12 +515,10 @@ Rules:
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
-        // Sequential uploads prevent hitting Dropbox 429 rate limits
         for (const file of filesToUpload) {
             await uploadToDropbox(file.name, file.content);
         }
 
-        // Overwrite /gig logo.png in-place (Preserves File ID & Shared Link URL)
         await copyDropboxLogo(theme.logoFilename);
 
         res.json({
@@ -541,4 +527,231 @@ Rules:
         });
 
     } catch (err) {
-        console.error('AI Offer Parsing Error Detail:', err.message
+        console.error('AI Offer Parsing Error Detail:', err.message || err);
+        res.status(500).json({ error: 'Failed to parse offer card screenshot', details: err.message });
+    }
+});
+
+// =========================================================================
+// REMOVE LAST OFFER ENDPOINT (/remove-offer)
+// =========================================================================
+app.post('/remove-offer', async (req, res) => {
+    try {
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (!currentStats.offer_history || currentStats.offer_history.length === 0) {
+            return res.json({
+                status: 'error',
+                message: 'No recent offer found in history to remove.'
+            });
+        }
+
+        const lastOffer = currentStats.offer_history.pop();
+
+        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+
+        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+
+        let newGrandTotal = Math.max(0, existingGrandTotal - lastOffer.pay).toFixed(2);
+        let newTotalMiles = Math.max(0, existingTotalMiles - lastOffer.miles).toFixed(1);
+
+        currentStats.grand_total = newGrandTotal;
+        currentStats.total_miles = newTotalMiles;
+        if (lastOffer.tip > 0) {
+            currentStats.app_tips = Math.max(0, parseFloat(currentStats.app_tips || 0) - lastOffer.tip).toFixed(2);
+        }
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'current_offer.txt', content: '\$0.00' },
+            { name: 'offer_miles.txt', content: '0.0' },
+            { name: 'merchant_name.txt', content: '[CANCELED]' },
+            { name: 'total.txt', content: `$${newGrandTotal}` },
+            { name: 'miles.txt', content: newTotalMiles },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            message: `Removed $${lastOffer.pay.toFixed(2)} / ${lastOffer.miles} mi (${lastOffer.merchant})`,
+            data: {
+                removedOffer: lastOffer,
+                newGrandTotal: `$${newGrandTotal}`,
+                newTotalMiles
+            }
+        });
+
+    } catch (err) {
+        console.error('Remove Offer Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to remove last offer', details: err.message });
+    }
+});
+
+// =========================================================================
+// MANUAL TIP RECEIVER (/add-tip)
+// =========================================================================
+app.post('/add-tip', async (req, res) => {
+    try {
+        const { amount } = req.body;
+        const tipAmount = parseFloat(amount || 0);
+
+        if (isNaN(tipAmount) || tipAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid tip amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        const updatedAppTips = (parseFloat(currentStats.app_tips || 0) + tipAmount).toFixed(2);
+        const updatedGrandTotal = (parseFloat(currentStats.grand_total || 0) + tipAmount).toFixed(2);
+
+        currentStats.app_tips = updatedAppTips;
+        currentStats.grand_total = updatedGrandTotal;
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'total.txt', content: `$${updatedGrandTotal}` },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                app_tips: updatedAppTips,
+                stream_tips: currentStats.stream_tips || "0.00",
+                grand_total: `$${updatedGrandTotal}`
+            }
+        });
+
+    } catch (err) {
+        console.error('Add Tip Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to record tip' });
+    }
+});
+
+// =========================================================================
+// PAPA GIGS TOTE BOARD API ENDPOINTS
+// =========================================================================
+
+// 1. Fetch live tote board stats with CORS & per-app calculation
+app.get('/api/toteboard', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+
+    try {
+        let stats = await getShiftStatsFromDropbox();
+        
+        let appsBreakdown = {
+            "DoorDash": 0,
+            "Uber Eats": 0,
+            "Instacart": 0,
+            "Amazon Flex": 0,
+            "Shipt": 0,
+            "Roadie": 0
+        };
+
+        if (Array.isArray(stats.offer_history)) {
+            stats.offer_history.forEach(offer => {
+                const name = offer.appName || 'Other';
+                const pay = parseFloat(offer.pay || 0);
+                if (appsBreakdown.hasOwnProperty(name)) {
+                    appsBreakdown[name] += pay;
+                } else {
+                    appsBreakdown[name] = pay;
+                }
+            });
+        }
+
+        res.json({
+            gross_earnings: parseFloat(stats.grand_total || 0),
+            miles: parseFloat(stats.total_miles || 0),
+            app_tips: parseFloat(stats.app_tips || 0),
+            other_donations: parseFloat(stats.other_donations || 0),
+            superchats: parseFloat(stats.superchats || 0),
+            jewels: parseInt(stats.jewels || 0),
+            subs: parseInt(stats.subs || 0),
+            apps_breakdown: appsBreakdown,
+            offer_history: stats.offer_history || [],
+            last_updated: stats.lastUpdated || new Date().toISOString()
+        });
+    } catch (err) {
+        console.error('Tote board stats fetch error:', err.message || err);
+        res.status(500).json({ error: 'Failed to fetch tote board metrics' });
+    }
+});
+
+// 2. Add manual tips/donations via iOS Shortcut or API
+app.post('/api/toteboard/add-donation', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const { type, amount } = req.body;
+        const addAmount = parseFloat(amount || 0);
+
+        if (isNaN(addAmount) || addAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid donation amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (type === 'app_tip') {
+            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        } else if (type === 'superchat') {
+            currentStats.superchats = (parseFloat(currentStats.superchats || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        } else if (type === 'jewel') {
+            currentStats.jewels = (parseInt(currentStats.jewels || 0) + parseInt(addAmount));
+        } else if (type === 'sub') {
+            currentStats.subs = (parseInt(currentStats.subs || 0) + parseInt(addAmount));
+        } else {
+            currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        }
+
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'total.txt', content: `$${currentStats.grand_total}` },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: currentStats
+        });
+    } catch (err) {
+        console.error('Tote board add donation error:', err.message || err);
+        res.status(500).json({ error: 'Failed to add donation' });
+    }
+});
+
+// 3. Reset tote board totals
+app.post('/api/toteboard/reset', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const resetStats = await executeShiftReset();
+        console.log('[Tote Board Reset] Successfully reset all totals');
+        res.json({ status: 'success', data: resetStats });
+    } catch (err) {
+        console.error('Tote board reset error:', err.message || err);
+        res.status(500).json({ error: 'Failed to reset tote board' });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+http.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
