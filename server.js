@@ -93,6 +93,7 @@ async function getShiftStatsFromDropbox() {
         other_donations: "0.00",
         superchats: "0.00",
         jewels: 0,
+        members: 0,
         subs: 0,
         grand_total: "0.00",
         total_miles: "0.0",
@@ -115,6 +116,7 @@ async function getShiftStatsFromDropbox() {
         if (!stats.other_donations) stats.other_donations = "0.00";
         if (!stats.superchats) stats.superchats = "0.00";
         if (stats.jewels === undefined) stats.jewels = 0;
+        if (stats.members === undefined) stats.members = 0;
         if (stats.subs === undefined) stats.subs = 0;
         return stats;
     } catch (e) {
@@ -137,7 +139,7 @@ async function readDropboxFloat(filePath, defaultValue = 0.0) {
     }
 }
 
-const MILEAGE_RATE = 0.725;
+const MILEAGE_RATE = 0.725; // IRS Rate
 
 // PERSISTENT SERVER STATE STORAGE
 let shortcutStartMiles = null;
@@ -170,7 +172,7 @@ app.get('/current-city', (req, res) => {
     res.json({ lat: currentLat, lon: currentLon });
 });
 
-// Helper function to perform a full shift wipe
+// Helper function to perform a full shift wipe (Only called when explicitly requested)
 async function executeShiftReset() {
     let freshStats = { 
         app_tips: "0.00", 
@@ -178,6 +180,7 @@ async function executeShiftReset() {
         other_donations: "0.00",
         superchats: "0.00",
         jewels: 0,
+        members: 0,
         subs: 0,
         grand_total: "0.00",
         total_miles: "0.0",
@@ -198,20 +201,20 @@ async function executeShiftReset() {
         await uploadToDropbox(file.name, file.content);
     }
 
-    accumulatedTerrainAdjustmentMiles = 0.0;
-    lastKnownAltitudeMeters = null;
-    savedPreviousTripsMiles = 0.0;
-    lastKnownRawMiles = 0.0;
-    shiftStartTime = null;
-
-    io.emit('shift_reset');
     return freshStats;
 }
 
-// Dedicated Shift Reset Route
+// Full Shift Reset Route (Clears both telemetry & tote board)
 app.get('/reset-shift', async (req, res) => {
     try {
         await executeShiftReset();
+        accumulatedTerrainAdjustmentMiles = 0.0;
+        lastKnownAltitudeMeters = null;
+        savedPreviousTripsMiles = 0.0;
+        lastKnownRawMiles = 0.0;
+        shiftStartTime = null;
+        io.emit('shift_reset');
+
         console.log('[Shift Reset] Shift totals and telemetry successfully cleared.');
         res.json({ status: 'success', message: 'Shift stats reset to \$0.00 and 0.0 miles!' });
     } catch (err) {
@@ -678,6 +681,7 @@ app.get('/api/toteboard', async (req, res) => {
             other_donations: parseFloat(stats.other_donations || 0),
             superchats: parseFloat(stats.superchats || 0),
             jewels: parseInt(stats.jewels || 0),
+            members: parseInt(stats.members || stats.subs || 0),
             subs: parseInt(stats.subs || 0),
             apps_breakdown: appsBreakdown,
             offer_history: stats.offer_history || [],
@@ -693,7 +697,7 @@ app.get('/api/toteboard', async (req, res) => {
 app.post('/api/toteboard/add-donation', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     try {
-        const { type, amount } = req.body;
+        const { type, amount } = req.body; // type: "app_tip", "other", "superchat", "jewel", "member", "sub"
         const addAmount = parseFloat(amount || 0);
 
         if (isNaN(addAmount) || addAmount <= 0) {
@@ -710,8 +714,9 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
             currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
         } else if (type === 'jewel') {
             currentStats.jewels = (parseInt(currentStats.jewels || 0) + parseInt(addAmount));
-        } else if (type === 'sub') {
-            currentStats.subs = (parseInt(currentStats.subs || 0) + parseInt(addAmount));
+        } else if (type === 'member' || type === 'sub') {
+            currentStats.members = (parseInt(currentStats.members || 0) + parseInt(addAmount));
+            currentStats.subs = currentStats.members;
         } else {
             currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
             currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
@@ -738,12 +743,12 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
     }
 });
 
-// 3. Reset tote board totals
+// 3. Reset Tote Board totals ONLY (Keeps Torque vehicle telemetry & trip clock intact!)
 app.post('/api/toteboard/reset', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     try {
         const resetStats = await executeShiftReset();
-        console.log('[Tote Board Reset] Successfully reset all totals');
+        console.log('[Tote Board Reset] Cleared shift earnings & offer history (Car telemetry untouched)');
         res.json({ status: 'success', data: resetStats });
     } catch (err) {
         console.error('Tote board reset error:', err.message || err);
