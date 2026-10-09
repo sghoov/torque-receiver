@@ -95,6 +95,7 @@ async function getShiftStatsFromDropbox() {
         jewels: 0,
         members: 0,
         subs: 0,
+        shift_start_subs: null,
         grand_total: "0.00",
         total_miles: "0.0",
         offer_history: [] 
@@ -118,6 +119,7 @@ async function getShiftStatsFromDropbox() {
         if (stats.jewels === undefined) stats.jewels = 0;
         if (stats.members === undefined) stats.members = 0;
         if (stats.subs === undefined) stats.subs = 0;
+        if (stats.shift_start_subs === undefined) stats.shift_start_subs = null;
         return stats;
     } catch (e) {
         console.log('shift_stats.json not found on Dropbox or failed to read, initializing fresh state...');
@@ -182,6 +184,7 @@ async function executeShiftReset() {
         jewels: 0,
         members: 0,
         subs: 0,
+        shift_start_subs: null,
         grand_total: "0.00",
         total_miles: "0.0",
         offer_history: [],
@@ -618,7 +621,6 @@ app.post('/add-tip', async (req, res) => {
         currentStats.lastUpdated = new Date().toISOString();
 
         const filesToUpload = [
-            { name: 'total.txt', content: `$${updatedGrandTotal}` },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
@@ -683,6 +685,7 @@ app.get('/api/toteboard', async (req, res) => {
             jewels: parseInt(stats.jewels || 0),
             members: parseInt(stats.members || stats.subs || 0),
             subs: parseInt(stats.subs || 0),
+            shift_start_subs: stats.shift_start_subs,
             apps_breakdown: appsBreakdown,
             offer_history: stats.offer_history || [],
             last_updated: stats.lastUpdated || new Date().toISOString()
@@ -725,8 +728,8 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
 
         currentStats.lastUpdated = new Date().toISOString();
 
+        // Upload shift_stats.json only! Keeps total.txt clean for offer widgets.
         const filesToUpload = [
-            { name: 'total.txt', content: `$${currentStats.grand_total}` },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
