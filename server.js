@@ -683,7 +683,7 @@ app.get('/api/toteboard', async (req, res) => {
             other_donations: parseFloat(stats.other_donations || 0),
             superchats: parseFloat(stats.superchats || 0),
             jewels: parseInt(stats.jewels || 0),
-            members: parseInt(stats.members || stats.subs || 0),
+            members: parseInt(stats.members || 0),
             subs: parseInt(stats.subs || 0),
             shift_start_subs: stats.shift_start_subs,
             apps_breakdown: appsBreakdown,
@@ -717,9 +717,18 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
             currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
         } else if (type === 'jewel') {
             currentStats.jewels = (parseInt(currentStats.jewels || 0) + parseInt(addAmount));
-        } else if (type === 'member' || type === 'sub') {
+        } else if (type === 'member' || type === 'membership') {
+            // Increment paid Channel Members count separately
             currentStats.members = (parseInt(currentStats.members || 0) + parseInt(addAmount));
-            currentStats.subs = currentStats.members;
+        } else if (type === 'sub' || type === 'subscriber') {
+            // Increment Subscribers gain count separately
+            const currentSubCount = parseInt(currentStats.subs || 0) + parseInt(addAmount);
+            currentStats.subs = currentSubCount;
+
+            // Adjust baseline shift_start_subs down so gain calculates correctly (+1)
+            if (currentStats.shift_start_subs !== undefined && currentStats.shift_start_subs !== null) {
+                currentStats.shift_start_subs = parseInt(currentStats.shift_start_subs) - parseInt(addAmount);
+            }
         } else {
             // Cash / Buy Me A Coffee / Stream Tips - Add to grand_total
             currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
