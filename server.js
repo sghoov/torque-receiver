@@ -195,6 +195,7 @@ async function executeShiftReset() {
         { name: 'current_offer.txt', content: '\$0.00' },
         { name: 'offer_miles.txt', content: '0.0' },
         { name: 'merchant_name.txt', content: 'READY' },
+        { name: 'offer_rank.txt', content: 'NONE' },
         { name: 'total.txt', content: '\$0.00' },
         { name: 'miles.txt', content: '0.0' },
         { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
@@ -420,8 +421,56 @@ app.get('/live', async (req, res) => {
     }
 });
 
+// Helper function to calculate weighted rank considering friction factors
+function calculateContextualRank(pay, miles, friction) {
+    if (pay <= 0 || miles <= 0) return "NONE";
+
+    let effectivePay = pay;
+    let effectiveMiles = miles;
+    let rateDeduction = 0.0;
+
+    // 1. Stacked Orders / Multi-stop Penalty
+    const stops = friction.stops || 1;
+    if (stops === 2) {
+        rateDeduction += 0.50; // -\$0.50/mi equivalent
+    } else if (stops >= 3) {
+        rateDeduction += 1.25; // -\$1.25/mi equivalent for heavy stacks
+    }
+
+    // 2. Alcohol ID Verification Penalty
+    if (friction.is_alcohol) {
+        effectivePay -= 1.50; // Deducts \$1.50 due to extra dropoff friction
+    }
+
+    // 3. Shop & Deliver / Red Card / Item Count Friction
+    if (friction.is_shop_and_deliver) {
+        const items = friction.item_count || 1;
+        if (items > 20) {
+            rateDeduction += 1.00;
+        } else if (items > 10) {
+            rateDeduction += 0.50;
+        } else {
+            rateDeduction += 0.25;
+        }
+    }
+
+    const rawRate = effectivePay / effectiveMiles;
+    const finalEffectiveRate = Math.max(0, rawRate - rateDeduction);
+
+    // Scoring Tier Determination
+    if (pay >= 20.00 && finalEffectiveRate >= 3.00) {
+        return "BANGER!";
+    } else if (pay >= 6.00 && finalEffectiveRate >= 2.00) {
+        return "SOLID";
+    } else if (pay < 6.00 && finalEffectiveRate >= 2.00) {
+        return "MEH";
+    } else {
+        return "DESPERATE";
+    }
+}
+
 // =========================================================================
-// AI OFFER CARD PARSER (/parse-offer)
+// AI OFFER CARD PARSER (/parse-offer) WITH CONTEXT FRICTION MATH
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
     try {
@@ -445,13 +494,21 @@ Extract the following details and return ONLY a valid JSON object with no markdo
   "merchant": "Store or Restaurant Name",
   "pay": 0.00,
   "miles": 0.0,
-  "tip": 0.00
+  "tip": 0.00,
+  "stops": 1,
+  "is_alcohol": false,
+  "is_shop_and_deliver": false,
+  "item_count": 0
 }
 
 Rules:
 1. "pay" is the total earnings payout shown on the offer card.
 2. "tip" is the explicit tip amount if broken down on the card. If no tip is broken down separately, set "tip" to 0.00.
-3. "merchant" is the pickup store/restaurant. If unknown, set to "DELIVERY OFFER".`;
+3. "merchant" is the pickup store/restaurant. If unknown, set to "DELIVERY OFFER".
+4. "stops" is the number of pickups + dropoffs / order stops (e.g. 1 for single order, 2 for stacked 2 orders/drops, 3+ for multi-batch).
+5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, or ID verification required.
+6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, or Instacart/Shipt shopping.
+7. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -469,6 +526,16 @@ Rules:
         const payNum = parseFloat(parsedData.pay || 0);
         const milesNum = parseFloat(parsedData.miles || 0);
         const tipNum = parseFloat(parsedData.tip || 0);
+
+        const friction = {
+            stops: parseInt(parsedData.stops || 1),
+            is_alcohol: Boolean(parsedData.is_alcohol),
+            is_shop_and_deliver: Boolean(parsedData.is_shop_and_deliver),
+            item_count: parseInt(parsedData.item_count || 0)
+        };
+
+        // Contextual Rank Score Evaluation
+        const calculatedRank = calculateContextualRank(payNum, milesNum, friction);
 
         const pay = payNum.toFixed(2);
         const miles = milesNum.toFixed(1);
@@ -493,6 +560,8 @@ Rules:
             merchant,
             pay: `$${pay}`,
             miles,
+            rank: calculatedRank,
+            friction,
             themeColor: theme.color,
             logoFilename: theme.logoFilename
         };
@@ -507,6 +576,8 @@ Rules:
             pay: payNum,
             miles: milesNum,
             tip: tipNum,
+            rank: calculatedRank,
+            friction,
             timestamp: new Date().toISOString()
         };
         currentStats.offer_history.push(offerRecord);
@@ -516,6 +587,7 @@ Rules:
             { name: 'current_offer.txt', content: `$${pay}` },
             { name: 'offer_miles.txt', content: miles },
             { name: 'merchant_name.txt', content: merchant },
+            { name: 'offer_rank.txt', content: calculatedRank },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
@@ -529,7 +601,7 @@ Rules:
 
         res.json({
             status: 'success',
-            data: { appName, merchant, pay: `$${pay}`, miles, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
         });
 
     } catch (err) {
@@ -574,6 +646,7 @@ app.post('/remove-offer', async (req, res) => {
             { name: 'current_offer.txt', content: '\$0.00' },
             { name: 'offer_miles.txt', content: '0.0' },
             { name: 'merchant_name.txt', content: '[CANCELED]' },
+            { name: 'offer_rank.txt', content: 'NONE' },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
@@ -710,7 +783,6 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
         let currentStats = await getShiftStatsFromDropbox();
 
         if (type === 'app_tip') {
-            // Update In-App Tips line ONLY - do NOT add to grand_total again!
             currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
         } else if (type === 'superchat') {
             currentStats.superchats = (parseFloat(currentStats.superchats || 0) + addAmount).toFixed(2);
@@ -718,26 +790,21 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
         } else if (type === 'jewel') {
             currentStats.jewels = (parseInt(currentStats.jewels || 0) + parseInt(addAmount));
         } else if (type === 'member' || type === 'membership') {
-            // Increment paid Channel Members count separately
             currentStats.members = (parseInt(currentStats.members || 0) + parseInt(addAmount));
         } else if (type === 'sub' || type === 'subscriber') {
-            // Increment Subscribers gain count separately
             const currentSubCount = parseInt(currentStats.subs || 0) + parseInt(addAmount);
             currentStats.subs = currentSubCount;
 
-            // Adjust baseline shift_start_subs down so gain calculates correctly (+1)
             if (currentStats.shift_start_subs !== undefined && currentStats.shift_start_subs !== null) {
                 currentStats.shift_start_subs = parseInt(currentStats.shift_start_subs) - parseInt(addAmount);
             }
         } else {
-            // Cash / Buy Me A Coffee / Stream Tips - Add to grand_total
             currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
             currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
         }
 
         currentStats.lastUpdated = new Date().toISOString();
 
-        // Upload shift_stats.json only! Keeps total.txt clean for offer widgets.
         const filesToUpload = [
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
