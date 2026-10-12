@@ -836,6 +836,41 @@ app.post('/api/toteboard/reset', async (req, res) => {
     }
 });
 
+// =========================================================================
+// AUTOMATIC SCANNING/CHARGING DATA CLEANUP WATCHER
+// =========================================================================
+async function checkAndCleanScanningStatus() {
+    try {
+        const fileDownload = await dbx.filesDownload({ path: '/status.txt' });
+        let contents = fileDownload.result.fileBinary 
+            ? Buffer.from(fileDownload.result.fileBinary).toString('utf-8') 
+            : fileDownload.result.fileBinary;
+            
+        let status = String(contents).trim().toLowerCase();
+
+        if (status === 'scanning' || status === 'charging') {
+            const clearFiles = [
+                { name: 'current_offer.txt', content: '\$0.00' },
+                { name: 'offer_miles.txt', content: '0.0' },
+                { name: 'merchant_name.txt', content: 'READY' },
+                { name: 'offer_rank.txt', content: 'NONE' }
+            ];
+
+            for (const file of clearFiles) {
+                await uploadToDropbox(file.name, file.content);
+            }
+        }
+    } catch (err) {
+        // Silent catch if status.txt is momentarily locked or missing
+    }
+}
+
+// Poll status.txt every 3 seconds to clear old offer data when scanning
+setInterval(checkAndCleanScanningStatus, 3000);
+
+// =========================================================================
+// SERVER LISTEN
+// =========================================================================
 const PORT = process.env.PORT || 3000;
 http.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
