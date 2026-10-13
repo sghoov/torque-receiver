@@ -506,8 +506,8 @@ Rules:
 2. "tip" is the explicit tip amount if broken down on the card. If no tip is broken down separately, set "tip" to 0.00.
 3. "merchant" is the pickup store/restaurant. If unknown, set to "DELIVERY OFFER".
 4. "stops" is the number of pickups + dropoffs / order stops (e.g. 1 for single order, 2 for stacked 2 orders/drops, 3+ for multi-batch).
-5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, or ID verification required.
-6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, or Instacart/Shipt shopping.
+5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
+6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
 7. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
