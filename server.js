@@ -387,4 +387,500 @@ app.get('/live', async (req, res) => {
         let compassHeading = "--";
         if (rawBearing !== null) {
             const directions = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-            let index = Math.round(((rawBearing % 360) / 45)) % 8
+            let index = Math.round(((rawBearing % 360) / 45)) % 8;
+            compassHeading = directions[index];
+        }
+
+        let latIn = getParam('kff1006');
+        if (latIn !== null && latIn !== 0) currentLat = latIn;
+
+        let lonIn = getParam('kff1005');
+        if (lonIn !== null && lonIn !== 0) currentLon = lonIn;
+
+        const telemetryData = {
+            distance: adjustedTripDistanceMiles.toFixed(1) + " mi", 
+            speed: Math.round(speedMph) + " mph",
+            elevation: elevationDisplay, 
+            temperature: tempFahrenheit,
+            compass: compassHeading,
+            lat: currentLat, 
+            lon: currentLon,
+            tripMilesRaw: adjustedTripDistanceMiles,
+            actualSessionMilesRaw: trueSessionMiles,
+            shiftSeconds: shiftDurationSeconds,
+            rawSpeed: speedMph,
+            tax: "\$" + taxSaved.toFixed(2)
+        };
+
+        io.emit('telemetry_update', telemetryData);
+        res.send('OK!');
+
+    } catch (liveError) {
+        console.error('Error handling live Torque packet:', liveError.message);
+        res.send('OK!');
+    }
+});
+
+// Helper function to calculate weighted rank considering friction factors & SUS detection
+function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
+    if (pay <= 0 || miles <= 0) return "NONE";
+
+    const rawRate = pay / miles;
+    const foodDeliveryApps = ["Uber Eats", "DoorDash", "Grubhub"];
+
+    // --- SUS / TOO GOOD TO BE TRUE DETECTOR ---
+    // Flags stolen orders or closed store loops (e.g., \$33 for 1 mile, \$44 for 4 miles)
+    if (foodDeliveryApps.includes(appName) && !friction.is_shop_and_deliver) {
+        if (rawRate >= 7.00 || (pay >= 25.00 && miles <= 3.5)) {
+            return "SUS!";
+        }
+    }
+
+    let effectivePay = pay;
+    let rateDeduction = 0.0;
+
+    // 1. Stacked Orders / Multi-stop Penalty
+    const stops = friction.stops || 1;
+    if (stops === 2) {
+        rateDeduction += 0.50; // -\$0.50/mi equivalent
+    } else if (stops >= 3) {
+        rateDeduction += 1.25; // -\$1.25/mi equivalent for heavy stacks
+    }
+
+    // 2. Alcohol ID Verification Penalty
+    if (friction.is_alcohol) {
+        effectivePay -= 1.50; // Deducts \$1.50 due to extra dropoff friction
+    }
+
+    // 3. Shop & Deliver / Red Card / Item Count Friction
+    if (friction.is_shop_and_deliver) {
+        const items = friction.item_count || 1;
+        if (items > 20) {
+            rateDeduction += 1.00;
+        } else if (items > 10) {
+            rateDeduction += 0.50;
+        } else {
+            rateDeduction += 0.25;
+        }
+    }
+
+    const finalEffectiveRate = Math.max(0, (effectivePay / miles) - rateDeduction);
+
+    // Scoring Tier Determination
+    if (pay >= 20.00 && finalEffectiveRate >= 3.00) {
+        return "BANGER!";
+    } else if (pay >= 6.00 && finalEffectiveRate >= 2.00) {
+        return "SOLID";
+    } else if (pay < 6.00 && finalEffectiveRate >= 2.00) {
+        return "MEH";
+    } else {
+        return "DESPERATE";
+    }
+}
+
+// =========================================================================
+// AI OFFER CARD PARSER (/parse-offer) WITH CONTEXT FRICTION MATH & SUS DETECTOR
+// =========================================================================
+app.post('/parse-offer', async (req, res) => {
+    try {
+        const { imageBase64 } = req.body;
+        if (!imageBase64) {
+            return res.status(400).json({ error: 'No image provided' });
+        }
+
+        const cleanBase64 = String(imageBase64)
+            .replace(/^data:image\/\w+;base64,/, '')
+            .replace(/\s+/g, '');
+
+        const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
+
+        const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
+DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
+
+Extract the following details and return ONLY a valid JSON object with no markdown formatting:
+{
+  "app_name": "DoorDash | Uber Eats | Instacart | Amazon Flex | Shipt | Roadie",
+  "merchant": "Store or Restaurant Name",
+  "pay": 0.00,
+  "miles": 0.0,
+  "tip": 0.00,
+  "stops": 1,
+  "is_alcohol": false,
+  "is_shop_and_deliver": false,
+  "item_count": 0
+}
+
+Rules:
+1. "pay" is the total earnings payout shown on the offer card.
+2. "tip" is the explicit tip amount if broken down on the card. If no tip is broken down separately, set "tip" to 0.00.
+3. "merchant" is the pickup store/restaurant. If unknown, set to "DELIVERY OFFER".
+4. "stops" is the number of pickups + dropoffs / order stops (e.g. 1 for single order, 2 for stacked 2 orders/drops, 3+ for multi-batch).
+5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
+6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
+7. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.`;
+
+        const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
+        const result = await model.generateContent([prompt, ...imageParts]);
+        const responseText = result.response.text();
+
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+            throw new Error('Gemini response did not contain JSON');
+        }
+
+        const parsedData = JSON.parse(jsonMatch[0]);
+
+        const appName = parsedData.app_name || 'DoorDash';
+        const merchant = (parsedData.merchant || 'DELIVERY OFFER').toUpperCase();
+        const payNum = parseFloat(parsedData.pay || 0);
+        const milesNum = parseFloat(parsedData.miles || 0);
+        const tipNum = parseFloat(parsedData.tip || 0);
+
+        const friction = {
+            stops: parseInt(parsedData.stops || 1),
+            is_alcohol: Boolean(parsedData.is_alcohol),
+            is_shop_and_deliver: Boolean(parsedData.is_shop_and_deliver),
+            item_count: parseInt(parsedData.item_count || 0)
+        };
+
+        // Contextual Rank Score & SUS Evaluation
+        const calculatedRank = calculateContextualRank(payNum, milesNum, friction, appName);
+
+        const pay = payNum.toFixed(2);
+        const miles = milesNum.toFixed(1);
+
+        const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+
+        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+
+        let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
+        let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
+
+        currentStats.grand_total = newGrandTotal;
+        currentStats.total_miles = newTotalMiles;
+        currentStats.last_offer = {
+            appName,
+            merchant,
+            pay: `$${pay}`,
+            miles,
+            rank: calculatedRank,
+            friction,
+            themeColor: theme.color,
+            logoFilename: theme.logoFilename
+        };
+        if (tipNum > 0) {
+            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
+        }
+
+        const offerRecord = {
+            id: Date.now(),
+            appName,
+            merchant,
+            pay: payNum,
+            miles: milesNum,
+            tip: tipNum,
+            rank: calculatedRank,
+            friction,
+            timestamp: new Date().toISOString()
+        };
+        currentStats.offer_history.push(offerRecord);
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'current_offer.txt', content: `$${pay}` },
+            { name: 'offer_miles.txt', content: miles },
+            { name: 'merchant_name.txt', content: merchant },
+            { name: 'offer_rank.txt', content: calculatedRank },
+            { name: 'total.txt', content: `$${newGrandTotal}` },
+            { name: 'miles.txt', content: newTotalMiles },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        await copyDropboxLogo(theme.logoFilename);
+
+        res.json({
+            status: 'success',
+            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+        });
+
+    } catch (err) {
+        console.error('AI Offer Parsing Error Detail:', err.message || err);
+        res.status(500).json({ error: 'Failed to parse offer card screenshot', details: err.message });
+    }
+});
+
+// =========================================================================
+// REMOVE LAST OFFER ENDPOINT (/remove-offer)
+// =========================================================================
+app.post('/remove-offer', async (req, res) => {
+    try {
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (!currentStats.offer_history || currentStats.offer_history.length === 0) {
+            return res.json({
+                status: 'error',
+                message: 'No recent offer found in history to remove.'
+            });
+        }
+
+        const lastOffer = currentStats.offer_history.pop();
+
+        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+
+        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+
+        let newGrandTotal = Math.max(0, existingGrandTotal - lastOffer.pay).toFixed(2);
+        let newTotalMiles = Math.max(0, existingTotalMiles - lastOffer.miles).toFixed(1);
+
+        currentStats.grand_total = newGrandTotal;
+        currentStats.total_miles = newTotalMiles;
+        if (lastOffer.tip > 0) {
+            currentStats.app_tips = Math.max(0, parseFloat(currentStats.app_tips || 0) - lastOffer.tip).toFixed(2);
+        }
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'current_offer.txt', content: '\$0.00' },
+            { name: 'offer_miles.txt', content: '0.0' },
+            { name: 'merchant_name.txt', content: '[CANCELED]' },
+            { name: 'offer_rank.txt', content: 'NONE' },
+            { name: 'total.txt', content: `$${newGrandTotal}` },
+            { name: 'miles.txt', content: newTotalMiles },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            message: `Removed $${lastOffer.pay.toFixed(2)} / ${lastOffer.miles} mi (${lastOffer.merchant})`,
+            data: {
+                removedOffer: lastOffer,
+                newGrandTotal: `$${newGrandTotal}`,
+                newTotalMiles
+            }
+        });
+
+    } catch (err) {
+        console.error('Remove Offer Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to remove last offer', details: err.message });
+    }
+});
+
+// =========================================================================
+// MANUAL TIP RECEIVER (/add-tip)
+// =========================================================================
+app.post('/add-tip', async (req, res) => {
+    try {
+        const { amount } = req.body;
+        const tipAmount = parseFloat(amount || 0);
+
+        if (isNaN(tipAmount) || tipAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid tip amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        const updatedAppTips = (parseFloat(currentStats.app_tips || 0) + tipAmount).toFixed(2);
+        const updatedGrandTotal = (parseFloat(currentStats.grand_total || 0) + tipAmount).toFixed(2);
+
+        currentStats.app_tips = updatedAppTips;
+        currentStats.grand_total = updatedGrandTotal;
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                app_tips: updatedAppTips,
+                stream_tips: currentStats.stream_tips || "0.00",
+                grand_total: `$${updatedGrandTotal}`
+            }
+        });
+
+    } catch (err) {
+        console.error('Add Tip Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to record tip' });
+    }
+});
+
+// =========================================================================
+// PAPA GIGS TOTE BOARD API ENDPOINTS
+// =========================================================================
+
+// 1. Fetch live tote board stats with CORS & per-app calculation
+app.get('/api/toteboard', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+
+    try {
+        let stats = await getShiftStatsFromDropbox();
+        
+        let appsBreakdown = {
+            "DoorDash": 0,
+            "Uber Eats": 0,
+            "Instacart": 0,
+            "Amazon Flex": 0,
+            "Shipt": 0,
+            "Roadie": 0
+        };
+
+        if (Array.isArray(stats.offer_history)) {
+            stats.offer_history.forEach(offer => {
+                const name = offer.appName || 'Other';
+                const pay = parseFloat(offer.pay || 0);
+                if (appsBreakdown.hasOwnProperty(name)) {
+                    appsBreakdown[name] += pay;
+                } else {
+                    appsBreakdown[name] = pay;
+                }
+            });
+        }
+
+        res.json({
+            gross_earnings: parseFloat(stats.grand_total || 0),
+            miles: parseFloat(stats.total_miles || 0),
+            app_tips: parseFloat(stats.app_tips || 0),
+            other_donations: parseFloat(stats.other_donations || 0),
+            superchats: parseFloat(stats.superchats || 0),
+            jewels: parseInt(stats.jewels || 0),
+            members: parseInt(stats.members || 0),
+            subs: parseInt(stats.subs || 0),
+            shift_start_subs: stats.shift_start_subs,
+            apps_breakdown: appsBreakdown,
+            offer_history: stats.offer_history || [],
+            last_updated: stats.lastUpdated || new Date().toISOString()
+        });
+    } catch (err) {
+        console.error('Tote board stats fetch error:', err.message || err);
+        res.status(500).json({ error: 'Failed to fetch tote board metrics' });
+    }
+});
+
+// 2. Add manual tips/donations via iOS Shortcut or API
+app.post('/api/toteboard/add-donation', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const { type, amount } = req.body; // type: "app_tip", "other", "superchat", "jewel", "member", "sub"
+        const addAmount = parseFloat(amount || 0);
+
+        if (isNaN(addAmount) || addAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid donation amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (type === 'app_tip') {
+            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
+        } else if (type === 'superchat') {
+            currentStats.superchats = (parseFloat(currentStats.superchats || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        } else if (type === 'jewel') {
+            currentStats.jewels = (parseInt(currentStats.jewels || 0) + parseInt(addAmount));
+        } else if (type === 'member' || type === 'membership') {
+            currentStats.members = (parseInt(currentStats.members || 0) + parseInt(addAmount));
+        } else if (type === 'sub' || type === 'subscriber') {
+            const currentSubCount = parseInt(currentStats.subs || 0) + parseInt(addAmount);
+            currentStats.subs = currentSubCount;
+
+            if (currentStats.shift_start_subs !== undefined && currentStats.shift_start_subs !== null) {
+                currentStats.shift_start_subs = parseInt(currentStats.shift_start_subs) - parseInt(addAmount);
+            }
+        } else {
+            currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        }
+
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: currentStats
+        });
+    } catch (err) {
+        console.error('Tote board add donation error:', err.message || err);
+        res.status(500).json({ error: 'Failed to add donation' });
+    }
+});
+
+// 3. Reset Tote Board totals ONLY (Keeps Torque vehicle telemetry & trip clock intact!)
+app.post('/api/toteboard/reset', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const resetStats = await executeShiftReset();
+        console.log('[Tote Board Reset] Cleared shift earnings & offer history (Car telemetry untouched)');
+        res.json({ status: 'success', data: resetStats });
+    } catch (err) {
+        console.error('Tote board reset error:', err.message || err);
+        res.status(500).json({ error: 'Failed to reset tote board' });
+    }
+});
+
+// =========================================================================
+// AUTOMATIC SCANNING/CHARGING DATA CLEANUP WATCHER
+// =========================================================================
+async function checkAndCleanScanningStatus() {
+    try {
+        const fileDownload = await dbx.filesDownload({ path: '/status.txt' });
+        let contents = fileDownload.result.fileBinary 
+            ? Buffer.from(fileDownload.result.fileBinary).toString('utf-8') 
+            : fileDownload.result.fileBinary;
+            
+        let status = String(contents).trim().toLowerCase();
+
+        if (status === 'scanning' || status === 'charging') {
+            const clearFiles = [
+                { name: 'current_offer.txt', content: '\$0.00' },
+                { name: 'offer_miles.txt', content: '0.0' },
+                { name: 'merchant_name.txt', content: 'READY' },
+                { name: 'offer_rank.txt', content: 'NONE' }
+            ];
+
+            for (const file of clearFiles) {
+                await uploadToDropbox(file.name, file.content);
+            }
+        }
+    } catch (err) {
+        // Silent catch if status.txt is momentarily locked or missing
+    }
+}
+
+// Poll status.txt every 3 seconds to clear old offer data when scanning
+setInterval(checkAndCleanScanningStatus, 3000);
+
+// =========================================================================
+// SERVER LISTEN
+// =========================================================================
+const PORT = process.env.PORT || 3000;
+http.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
