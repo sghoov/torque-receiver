@@ -421,22 +421,34 @@ app.get('/live', async (req, res) => {
     }
 });
 
-// Helper function to calculate weighted rank considering friction factors & SUS detection
+// Helper function to calculate weighted rank considering friction factors & strict app-level SUS detection
 function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
     if (pay <= 0) return "NONE";
 
+    const cleanApp = String(appName || '').toLowerCase();
+
+    // STRICT EXCLUSION FOR NON-FOOD & PACKAGE/GROCERY APPS
+    const isExcludedApp = cleanApp.includes("amazon") || 
+                          cleanApp.includes("flex") || 
+                          cleanApp.includes("roadie") || 
+                          cleanApp.includes("instacart") || 
+                          cleanApp.includes("insta") || 
+                          cleanApp.includes("shipt");
+
+    const isDoorDashOrUber = cleanApp.includes("doordash") || 
+                             cleanApp.includes("uber") || 
+                             cleanApp === "dd" || 
+                             cleanApp === "ue";
+
     // --- SUS / TOO GOOD TO BE TRUE DETECTOR ---
     // Strictly restrict SUS! alerts to DoorDash and Uber Eats ONLY
-    const susAllowedApps = ["Uber Eats", "DoorDash"];
-
-    if (susAllowedApps.includes(appName) && !friction.is_shop_and_deliver) {
+    if (isDoorDashOrUber && !isExcludedApp && !friction.is_shop_and_deliver) {
         if (miles > 0) {
             const rawRate = pay / miles;
             if (rawRate >= 7.00 || (pay >= 25.00 && miles <= 3.5)) {
                 return "SUS!";
             }
         } else if (pay >= 15.00) {
-            // \$0 drive / zero miles detected for DoorDash/Uber Eats
             return "SUS!";
         }
     }
@@ -868,29 +880,4 @@ async function checkAndCleanScanningStatus() {
         let status = String(contents).trim().toLowerCase();
 
         if (status === 'scanning' || status === 'charging') {
-            const clearFiles = [
-                { name: 'current_offer.txt', content: '\$0.00' },
-                { name: 'offer_miles.txt', content: '0.0' },
-                { name: 'merchant_name.txt', content: 'READY' },
-                { name: 'offer_rank.txt', content: 'NONE' }
-            ];
-
-            for (const file of clearFiles) {
-                await uploadToDropbox(file.name, file.content);
-            }
-        }
-    } catch (err) {
-        // Silent catch if status.txt is momentarily locked or missing
-    }
-}
-
-// Poll status.txt every 3 seconds to clear old offer data when scanning
-setInterval(checkAndCleanScanningStatus, 3000);
-
-// =========================================================================
-// SERVER LISTEN
-// =========================================================================
-const PORT = process.env.PORT || 3000;
-http.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+            const clearFiles =
