@@ -192,11 +192,11 @@ async function executeShiftReset() {
     };
 
     const resetFiles = [
-        { name: 'current_offer.txt', content: '\$0.00' },
+        { name: 'current_offer.txt', content: '$0.00' },
         { name: 'offer_miles.txt', content: '0.0' },
         { name: 'merchant_name.txt', content: 'READY' },
         { name: 'offer_rank.txt', content: 'NONE' },
-        { name: 'total.txt', content: '\$0.00' },
+        { name: 'total.txt', content: '$0.00' },
         { name: 'miles.txt', content: '0.0' },
         { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
     ];
@@ -220,7 +220,7 @@ app.get('/reset-shift', async (req, res) => {
         io.emit('shift_reset');
 
         console.log('[Shift Reset] Shift totals and telemetry successfully cleared.');
-        res.json({ status: 'success', message: 'Shift stats reset to \$0.00 and 0.0 miles!' });
+        res.json({ status: 'success', message: 'Shift stats reset to $0.00 and 0.0 miles!' });
     } catch (err) {
         console.error('Reset Shift Error:', err.message || err);
         res.status(500).json({ error: 'Failed to reset shift', details: err.message });
@@ -409,7 +409,7 @@ app.get('/live', async (req, res) => {
             actualSessionMilesRaw: trueSessionMiles,
             shiftSeconds: shiftDurationSeconds,
             rawSpeed: speedMph,
-            tax: "\$" + taxSaved.toFixed(2)
+            tax: "$" + taxSaved.toFixed(2)
         };
 
         io.emit('telemetry_update', telemetryData);
@@ -464,14 +464,14 @@ function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
     // 1. Stacked Orders / Multi-stop Penalty
     const stops = friction.stops || 1;
     if (stops === 2) {
-        rateDeduction += 0.50; // -\$0.50/mi equivalent
+        rateDeduction += 0.50; // -$0.50/mi equivalent
     } else if (stops >= 3) {
-        rateDeduction += 1.25; // -\$1.25/mi equivalent for heavy stacks
+        rateDeduction += 1.25; // -$1.25/mi equivalent for heavy stacks
     }
 
     // 2. Alcohol ID Verification Penalty
     if (friction.is_alcohol) {
-        effectivePay -= 1.50; // Deducts \$1.50 due to extra dropoff friction
+        effectivePay -= 1.50; // Deducts $1.50 due to extra dropoff friction
     }
 
     // 3. Shop & Deliver / Red Card / Item Count Friction
@@ -880,4 +880,29 @@ async function checkAndCleanScanningStatus() {
         let status = String(contents).trim().toLowerCase();
 
         if (status === 'scanning' || status === 'charging') {
-            const clearFiles =
+            const clearFiles = [
+                { name: 'current_offer.txt', content: '\$0.00' },
+                { name: 'offer_miles.txt', content: '0.0' },
+                { name: 'merchant_name.txt', content: 'READY' },
+                { name: 'offer_rank.txt', content: 'NONE' }
+            ];
+
+            for (const file of clearFiles) {
+                await uploadToDropbox(file.name, file.content);
+            }
+        }
+    } catch (err) {
+        // Silent catch if status.txt is momentarily locked or missing
+    }
+}
+
+// Poll status.txt every 3 seconds to clear old offer data when scanning
+setInterval(checkAndCleanScanningStatus, 3000);
+
+// =========================================================================
+// SERVER LISTEN
+// =========================================================================
+const PORT = process.env.PORT || 3000;
+http.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
