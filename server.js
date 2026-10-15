@@ -423,17 +423,27 @@ app.get('/live', async (req, res) => {
 
 // Helper function to calculate weighted rank considering friction factors & SUS detection
 function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
-    if (pay <= 0 || miles <= 0) return "NONE";
-
-    const rawRate = pay / miles;
-    const foodDeliveryApps = ["Uber Eats", "DoorDash", "Grubhub"];
+    if (pay <= 0) return "NONE";
 
     // --- SUS / TOO GOOD TO BE TRUE DETECTOR ---
-    // Flags stolen orders or closed store loops (e.g., \$33 for 1 mile, \$44 for 4 miles)
-    if (foodDeliveryApps.includes(appName) && !friction.is_shop_and_deliver) {
-        if (rawRate >= 7.00 || (pay >= 25.00 && miles <= 3.5)) {
+    // Strictly restrict SUS! alerts to DoorDash and Uber Eats ONLY
+    const susAllowedApps = ["Uber Eats", "DoorDash"];
+
+    if (susAllowedApps.includes(appName) && !friction.is_shop_and_deliver) {
+        if (miles > 0) {
+            const rawRate = pay / miles;
+            if (rawRate >= 7.00 || (pay >= 25.00 && miles <= 3.5)) {
+                return "SUS!";
+            }
+        } else if (pay >= 15.00) {
+            // \$0 drive / zero miles detected for DoorDash/Uber Eats
             return "SUS!";
         }
+    }
+
+    // Handle 0 miles for non-SUS applications cleanly
+    if (miles <= 0) {
+        return pay >= 15.00 ? "BANGER!" : "SOLID";
     }
 
     let effectivePay = pay;
