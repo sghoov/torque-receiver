@@ -191,6 +191,11 @@ async function executeShiftReset() {
         lastUpdated: new Date().toISOString()
     };
 
+    const emptyItemsObject = {
+        status: "DELIVERING",
+        items: []
+    };
+
     const resetFiles = [
         { name: 'current_offer.txt', content: '\$0.00' },
         { name: 'offer_miles.txt', content: '0.0' },
@@ -198,7 +203,7 @@ async function executeShiftReset() {
         { name: 'offer_rank.txt', content: 'NONE' },
         { name: 'total.txt', content: '\$0.00' },
         { name: 'miles.txt', content: '0.0' },
-        { name: 'current_items.json', content: JSON.stringify([], null, 2) },
+        { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) },
         { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
     ];
 
@@ -530,6 +535,7 @@ Extract the following details and return ONLY a valid JSON object with no markdo
   "stops": 1,
   "is_alcohol": false,
   "is_shop_and_deliver": false,
+  "is_shopping": false,
   "item_count": 0,
   "items": []
 }
@@ -541,8 +547,9 @@ Rules:
 4. "stops" is the number of pickups + dropoffs / order stops (e.g. 1 for single order, 2 for stacked 2 orders/drops, 3+ for multi-batch).
 5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
 6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
-7. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.
-8. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities (e.g., ["2x Crunchwrap Supreme", "1x Large Pepsi", "1x Whole Milk"]).
+7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run (e.g., Target, CVS, Walgreens, Meijer, DashMart grocery picking). Set to false for prepared restaurant kitchen food orders.
+8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.
+9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities (e.g., ["2x Crunchwrap Supreme", "1x Large Pepsi", "1x Whole Milk"]).
    - STRICTLY EXCLUDE: sauce packets (Mild, Hot, Fire), condiments, extra toppings, preparation options ("No onions", "Extra cheese"), packaging notes, and micro-customizations.
    - If no individual item breakdown is shown, return "items" as an empty array [].`;
 
@@ -567,6 +574,19 @@ Rules:
         const parsedItems = Array.isArray(parsedData.items)
             ? parsedData.items.map(i => String(i).trim()).filter(Boolean)
             : [];
+
+        // Determine order mode (SHOPPING vs DELIVERING)
+        const isShoppingRun = Boolean(
+            parsedData.is_shopping || 
+            parsedData.is_shop_and_deliver || 
+            ['Instacart', 'Shipt'].includes(appName)
+        );
+        const orderStatus = isShoppingRun ? 'SHOPPING' : 'DELIVERING';
+
+        const itemsPayload = {
+            status: orderStatus,
+            items: parsedItems
+        };
 
         const friction = {
             stops: parseInt(parsedData.stops || 1),
@@ -603,6 +623,7 @@ Rules:
             miles,
             rank: calculatedRank,
             friction,
+            orderStatus,
             items: parsedItems,
             themeColor: theme.color,
             logoFilename: theme.logoFilename
@@ -620,6 +641,7 @@ Rules:
             tip: tipNum,
             rank: calculatedRank,
             friction,
+            orderStatus,
             items: parsedItems,
             timestamp: new Date().toISOString()
         };
@@ -633,7 +655,7 @@ Rules:
             { name: 'offer_rank.txt', content: calculatedRank },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
-            { name: 'current_items.json', content: JSON.stringify(parsedItems, null, 2) },
+            { name: 'current_items.json', content: JSON.stringify(itemsPayload, null, 2) },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
@@ -645,7 +667,7 @@ Rules:
 
         res.json({
             status: 'success',
-            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, orderStatus, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
         });
 
     } catch (err) {
@@ -686,6 +708,11 @@ app.post('/remove-offer', async (req, res) => {
         }
         currentStats.lastUpdated = new Date().toISOString();
 
+        const emptyItemsObject = {
+            status: "DELIVERING",
+            items: []
+        };
+
         const filesToUpload = [
             { name: 'current_offer.txt', content: '\$0.00' },
             { name: 'offer_miles.txt', content: '0.0' },
@@ -693,7 +720,7 @@ app.post('/remove-offer', async (req, res) => {
             { name: 'offer_rank.txt', content: 'NONE' },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
-            { name: 'current_items.json', content: JSON.stringify([], null, 2) },
+            { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
@@ -894,12 +921,17 @@ async function checkAndCleanScanningStatus() {
         let status = String(contents).trim().toLowerCase();
 
         if (status === 'scanning' || status === 'charging') {
+            const emptyItemsObject = {
+                status: "DELIVERING",
+                items: []
+            };
+
             const clearFiles = [
                 { name: 'current_offer.txt', content: '\$0.00' },
                 { name: 'offer_miles.txt', content: '0.0' },
                 { name: 'merchant_name.txt', content: 'READY' },
                 { name: 'offer_rank.txt', content: 'NONE' },
-                { name: 'current_items.json', content: JSON.stringify([], null, 2) }
+                { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) }
             ];
 
             for (const file of clearFiles) {
