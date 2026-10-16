@@ -192,12 +192,13 @@ async function executeShiftReset() {
     };
 
     const resetFiles = [
-        { name: 'current_offer.txt', content: '$0.00' },
+        { name: 'current_offer.txt', content: '\$0.00' },
         { name: 'offer_miles.txt', content: '0.0' },
         { name: 'merchant_name.txt', content: 'READY' },
         { name: 'offer_rank.txt', content: 'NONE' },
-        { name: 'total.txt', content: '$0.00' },
+        { name: 'total.txt', content: '\$0.00' },
         { name: 'miles.txt', content: '0.0' },
+        { name: 'current_items.json', content: JSON.stringify([], null, 2) },
         { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
     ];
 
@@ -220,7 +221,7 @@ app.get('/reset-shift', async (req, res) => {
         io.emit('shift_reset');
 
         console.log('[Shift Reset] Shift totals and telemetry successfully cleared.');
-        res.json({ status: 'success', message: 'Shift stats reset to $0.00 and 0.0 miles!' });
+        res.json({ status: 'success', message: 'Shift stats reset to \$0.00 and 0.0 miles!' });
     } catch (err) {
         console.error('Reset Shift Error:', err.message || err);
         res.status(500).json({ error: 'Failed to reset shift', details: err.message });
@@ -409,7 +410,7 @@ app.get('/live', async (req, res) => {
             actualSessionMilesRaw: trueSessionMiles,
             shiftSeconds: shiftDurationSeconds,
             rawSpeed: speedMph,
-            tax: "$" + taxSaved.toFixed(2)
+            tax: "\$" + taxSaved.toFixed(2)
         };
 
         io.emit('telemetry_update', telemetryData);
@@ -464,14 +465,14 @@ function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
     // 1. Stacked Orders / Multi-stop Penalty
     const stops = friction.stops || 1;
     if (stops === 2) {
-        rateDeduction += 0.50; // -$0.50/mi equivalent
+        rateDeduction += 0.50; // -\$0.50/mi equivalent
     } else if (stops >= 3) {
-        rateDeduction += 1.25; // -$1.25/mi equivalent for heavy stacks
+        rateDeduction += 1.25; // -\$1.25/mi equivalent for heavy stacks
     }
 
     // 2. Alcohol ID Verification Penalty
     if (friction.is_alcohol) {
-        effectivePay -= 1.50; // Deducts $1.50 due to extra dropoff friction
+        effectivePay -= 1.50; // Deducts \$1.50 due to extra dropoff friction
     }
 
     // 3. Shop & Deliver / Red Card / Item Count Friction
@@ -529,7 +530,8 @@ Extract the following details and return ONLY a valid JSON object with no markdo
   "stops": 1,
   "is_alcohol": false,
   "is_shop_and_deliver": false,
-  "item_count": 0
+  "item_count": 0,
+  "items": []
 }
 
 Rules:
@@ -539,7 +541,10 @@ Rules:
 4. "stops" is the number of pickups + dropoffs / order stops (e.g. 1 for single order, 2 for stacked 2 orders/drops, 3+ for multi-batch).
 5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
 6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
-7. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.`;
+7. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.
+8. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities (e.g., ["2x Crunchwrap Supreme", "1x Large Pepsi", "1x Whole Milk"]).
+   - STRICTLY EXCLUDE: sauce packets (Mild, Hot, Fire), condiments, extra toppings, preparation options ("No onions", "Extra cheese"), packaging notes, and micro-customizations.
+   - If no individual item breakdown is shown, return "items" as an empty array [].`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -557,6 +562,11 @@ Rules:
         const payNum = parseFloat(parsedData.pay || 0);
         const milesNum = parseFloat(parsedData.miles || 0);
         const tipNum = parseFloat(parsedData.tip || 0);
+
+        // Clean & Filter Parsed Items Array
+        const parsedItems = Array.isArray(parsedData.items)
+            ? parsedData.items.map(i => String(i).trim()).filter(Boolean)
+            : [];
 
         const friction = {
             stops: parseInt(parsedData.stops || 1),
@@ -593,6 +603,7 @@ Rules:
             miles,
             rank: calculatedRank,
             friction,
+            items: parsedItems,
             themeColor: theme.color,
             logoFilename: theme.logoFilename
         };
@@ -609,6 +620,7 @@ Rules:
             tip: tipNum,
             rank: calculatedRank,
             friction,
+            items: parsedItems,
             timestamp: new Date().toISOString()
         };
         currentStats.offer_history.push(offerRecord);
@@ -621,6 +633,7 @@ Rules:
             { name: 'offer_rank.txt', content: calculatedRank },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
+            { name: 'current_items.json', content: JSON.stringify(parsedItems, null, 2) },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
@@ -632,7 +645,7 @@ Rules:
 
         res.json({
             status: 'success',
-            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
         });
 
     } catch (err) {
@@ -680,6 +693,7 @@ app.post('/remove-offer', async (req, res) => {
             { name: 'offer_rank.txt', content: 'NONE' },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
+            { name: 'current_items.json', content: JSON.stringify([], null, 2) },
             { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
         ];
 
@@ -884,7 +898,8 @@ async function checkAndCleanScanningStatus() {
                 { name: 'current_offer.txt', content: '\$0.00' },
                 { name: 'offer_miles.txt', content: '0.0' },
                 { name: 'merchant_name.txt', content: 'READY' },
-                { name: 'offer_rank.txt', content: 'NONE' }
+                { name: 'offer_rank.txt', content: 'NONE' },
+                { name: 'current_items.json', content: JSON.stringify([], null, 2) }
             ];
 
             for (const file of clearFiles) {
