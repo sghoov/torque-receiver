@@ -127,6 +127,19 @@ async function getShiftStatsFromDropbox() {
     }
 }
 
+// Helper to safely read current items from Dropbox JSON
+async function getCurrentItemsFromDropbox() {
+    try {
+        const fileDownload = await dbx.filesDownload({ path: '/current_items.json' });
+        let contents = fileDownload.result.fileBinary 
+            ? Buffer.from(fileDownload.result.fileBinary).toString('utf-8') 
+            : fileDownload.result.fileBinary;
+        return JSON.parse(contents);
+    } catch (e) {
+        return { status: "DELIVERING", items: [] };
+    }
+}
+
 // Helper to safely read a floating-point value from Dropbox file or default to 0
 async function readDropboxFloat(filePath, defaultValue = 0.0) {
     try {
@@ -507,7 +520,7 @@ function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
 }
 
 // =========================================================================
-// AI OFFER CARD PARSER (/parse-offer) WITH CONTEXT FRICTION MATH & SUS DETECTOR
+// AI OFFER CARD PARSER (/parse-offer) WITH SAFEGUARD FOR ITEMS-ONLY SCREENS
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
     try {
@@ -522,10 +535,14 @@ app.post('/parse-offer', async (req, res) => {
 
         const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
 
-        const prompt = `Analyze this gig delivery offer card screenshot from one of these platforms: 
+        const prompt = `Analyze this gig delivery offer card or order details screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
 
-Extract the following details and return ONLY a valid JSON object with no markdown formatting:
+This screenshot could be EITHER:
+A) An initial offer acceptance card (showing payout price, distance miles, and merchant).
+B) An order items / itemized shopping list screen (showing food/grocery items).
+
+Extract the details and return ONLY a valid JSON object with no markdown formatting:
 {
   "app_name": "DoorDash | Uber Eats | Instacart | Amazon Flex | Shipt | Roadie",
   "merchant": "Store or Restaurant Name",
@@ -541,17 +558,17 @@ Extract the following details and return ONLY a valid JSON object with no markdo
 }
 
 Rules:
-1. "pay" is the total earnings payout shown on the offer card.
-2. "tip" is the explicit tip amount if broken down on the card. If no tip is broken down separately, set "tip" to 0.00.
-3. "merchant" is the pickup store/restaurant. If unknown, set to "DELIVERY OFFER".
-4. "stops" is the number of pickups + dropoffs / order stops (e.g. 1 for single order, 2 for stacked 2 orders/drops, 3+ for multi-batch).
+1. "pay" is the total earnings payout shown on an offer card. If no dollar payout is visible on this screen, set "pay" to 0.00.
+2. "miles" is the distance miles shown on an offer card. If no distance is visible on this screen, set "miles" to 0.0.
+3. "merchant" is the pickup store/restaurant. If unknown, set to "".
+4. "stops" is the number of pickups + dropoffs / order stops.
 5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
 6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
-7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run (e.g., Target, CVS, Walgreens, Meijer, DashMart grocery picking). Set to false for prepared restaurant kitchen food orders.
-8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order. Set to 0 if not shown.
+7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run (e.g., Target, CVS, Walgreens, Meijer, DashMart grocery picking).
+8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities (e.g., ["2x Crunchwrap Supreme", "1x Large Pepsi", "1x Whole Milk"]).
    - STRICTLY EXCLUDE: sauce packets (Mild, Hot, Fire), condiments, extra toppings, preparation options ("No onions", "Extra cheese"), packaging notes, and micro-customizations.
-   - If no individual item breakdown is shown, return "items" as an empty array [].`;
+   - If no individual item breakdown is shown, return "items" as [].`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -565,7 +582,7 @@ Rules:
         const parsedData = JSON.parse(jsonMatch[0]);
 
         const appName = parsedData.app_name || 'DoorDash';
-        const merchant = (parsedData.merchant || 'DELIVERY OFFER').toUpperCase();
+        const merchant = (parsedData.merchant || '').toUpperCase();
         const payNum = parseFloat(parsedData.pay || 0);
         const milesNum = parseFloat(parsedData.miles || 0);
         const tipNum = parseFloat(parsedData.tip || 0);
@@ -583,92 +600,122 @@ Rules:
         );
         const orderStatus = isShoppingRun ? 'SHOPPING' : 'DELIVERING';
 
-        const itemsPayload = {
-            status: orderStatus,
-            items: parsedItems
-        };
+        // IS THIS AN INITIAL OFFER CARD PARSE OR JUST AN ITEMS SCREENSHOT?
+        // If pay or miles > 0, treat as a NEW OFFER CARD scan.
+        if (payNum > 0 || milesNum > 0) {
+            const friction = {
+                stops: parseInt(parsedData.stops || 1),
+                is_alcohol: Boolean(parsedData.is_alcohol),
+                is_shop_and_deliver: Boolean(parsedData.is_shop_and_deliver),
+                item_count: parseInt(parsedData.item_count || 0)
+            };
 
-        const friction = {
-            stops: parseInt(parsedData.stops || 1),
-            is_alcohol: Boolean(parsedData.is_alcohol),
-            is_shop_and_deliver: Boolean(parsedData.is_shop_and_deliver),
-            item_count: parseInt(parsedData.item_count || 0)
-        };
+            const calculatedRank = calculateContextualRank(payNum, milesNum, friction, appName);
+            const pay = payNum.toFixed(2);
+            const miles = milesNum.toFixed(1);
+            const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
 
-        // Contextual Rank Score & SUS Evaluation
-        const calculatedRank = calculateContextualRank(payNum, milesNum, friction, appName);
+            let currentStats = await getShiftStatsFromDropbox();
 
-        const pay = payNum.toFixed(2);
-        const miles = milesNum.toFixed(1);
+            let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+            let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
 
-        const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
+            let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+            let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
 
-        let currentStats = await getShiftStatsFromDropbox();
+            let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
+            let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
 
-        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
-        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+            currentStats.grand_total = newGrandTotal;
+            currentStats.total_miles = newTotalMiles;
+            currentStats.last_offer = {
+                appName,
+                merchant: merchant || "DELIVERY OFFER",
+                pay: `$${pay}`,
+                miles,
+                rank: calculatedRank,
+                friction,
+                orderStatus,
+                items: parsedItems,
+                themeColor: theme.color,
+                logoFilename: theme.logoFilename
+            };
 
-        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
-        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+            if (tipNum > 0) {
+                currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
+            }
 
-        let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
-        let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
+            const offerRecord = {
+                id: Date.now(),
+                appName,
+                merchant: merchant || "DELIVERY OFFER",
+                pay: payNum,
+                miles: milesNum,
+                tip: tipNum,
+                rank: calculatedRank,
+                friction,
+                orderStatus,
+                items: parsedItems,
+                timestamp: new Date().toISOString()
+            };
+            currentStats.offer_history.push(offerRecord);
+            currentStats.lastUpdated = new Date().toISOString();
 
-        currentStats.grand_total = newGrandTotal;
-        currentStats.total_miles = newTotalMiles;
-        currentStats.last_offer = {
-            appName,
-            merchant,
-            pay: `$${pay}`,
-            miles,
-            rank: calculatedRank,
-            friction,
-            orderStatus,
-            items: parsedItems,
-            themeColor: theme.color,
-            logoFilename: theme.logoFilename
-        };
-        if (tipNum > 0) {
-            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
+            const itemsPayload = {
+                status: orderStatus,
+                items: parsedItems
+            };
+
+            const filesToUpload = [
+                { name: 'current_offer.txt', content: `$${pay}` },
+                { name: 'offer_miles.txt', content: miles },
+                { name: 'merchant_name.txt', content: merchant || "DELIVERY OFFER" },
+                { name: 'offer_rank.txt', content: calculatedRank },
+                { name: 'total.txt', content: `$${newGrandTotal}` },
+                { name: 'miles.txt', content: newTotalMiles },
+                { name: 'current_items.json', content: JSON.stringify(itemsPayload, null, 2) },
+                { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+            ];
+
+            for (const file of filesToUpload) {
+                await uploadToDropbox(file.name, file.content);
+            }
+
+            await copyDropboxLogo(theme.logoFilename);
+
+            return res.json({
+                status: 'success',
+                type: 'OFFER_CARD',
+                data: { appName, merchant: merchant || "DELIVERY OFFER", pay: `$${pay}`, miles, rank: calculatedRank, friction, orderStatus, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+            });
+        } 
+        else {
+            // ITEMS-ONLY SCREENSHOT SAFEGUARD:
+            // Pay and miles were 0 on this screenshot. Merge items and update current_items.json ONLY!
+            let existingItemsObj = await getCurrentItemsFromDropbox();
+            let mergedItems = Array.isArray(existingItemsObj.items) ? [...existingItemsObj.items] : [];
+
+            parsedItems.forEach(newItem => {
+                const clean = newItem.trim();
+                if (clean && !mergedItems.includes(clean)) {
+                    mergedItems.push(clean);
+                }
+            });
+
+            const itemsPayload = {
+                status: orderStatus,
+                items: mergedItems
+            };
+
+            await uploadToDropbox('current_items.json', JSON.stringify(itemsPayload, null, 2));
+            console.log(`[Parse Offer] Item screenshot processed safely (${mergedItems.length} items total). Main offer card untouched.`);
+
+            return res.json({
+                status: 'success',
+                type: 'ITEMS_ONLY',
+                data: { orderStatus, items: mergedItems }
+            });
         }
-
-        const offerRecord = {
-            id: Date.now(),
-            appName,
-            merchant,
-            pay: payNum,
-            miles: milesNum,
-            tip: tipNum,
-            rank: calculatedRank,
-            friction,
-            orderStatus,
-            items: parsedItems,
-            timestamp: new Date().toISOString()
-        };
-        currentStats.offer_history.push(offerRecord);
-        currentStats.lastUpdated = new Date().toISOString();
-
-        const filesToUpload = [
-            { name: 'current_offer.txt', content: `$${pay}` },
-            { name: 'offer_miles.txt', content: miles },
-            { name: 'merchant_name.txt', content: merchant },
-            { name: 'offer_rank.txt', content: calculatedRank },
-            { name: 'total.txt', content: `$${newGrandTotal}` },
-            { name: 'miles.txt', content: newTotalMiles },
-            { name: 'current_items.json', content: JSON.stringify(itemsPayload, null, 2) },
-            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
-        ];
-
-        for (const file of filesToUpload) {
-            await uploadToDropbox(file.name, file.content);
-        }
-
-        await copyDropboxLogo(theme.logoFilename);
-
-        res.json({
-            status: 'success',
-            data: { appName, merchant, pay: `$${pay}`, miles, rank: calculatedRank, friction, orderStatus, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
-        });
 
     } catch (err) {
         console.error('AI Offer Parsing Error Detail:', err.message || err);
