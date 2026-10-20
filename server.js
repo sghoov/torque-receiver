@@ -476,11 +476,26 @@ B) An order items / itemized shopping list screen (showing food/grocery items).
 Extract the details and evaluate the offer quality using the ranking rules below.
 
 ### RANKING RULES:
-1. "BANGER!" - High payout over $16, high rate per mile ($2.00+/mile), short time commitment, or great overall offer value.
-2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reliable merchant, reasonable distance.
-3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer. multiple stops
-4. "DESPERATE" - Low payout (<$1.00/mile), long distance, high effort, 3 or more stops, or terrible pay for distance. You can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!
-5. "SUS!" - Red flags present (e.g. unrealistically high pay for short miles, in excess of $3 a mile, suspicious store/distance ratio, like too good to be true.)
+
+1. STANDARD DELIVERY RUNS (Restaurants / Fast Food / Package Pickups):
+   - "BANGER!": High payout (over $16), high rate per mile ($2.00+/mile), short time commitment, or great overall offer value.
+   - "SOLID": Fair payout ($1.50 - $2.00/mile), reliable merchant, reasonable distance.
+   - "MEH": Borderline payout ($1.00 - $1.50/mile), average offer, or multiple stops.
+   - "DESPERATE": Low payout (<$1.00/mile), long distance, high effort, 3+ stops, or terrible pay for distance. (Can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!)
+   - "SUS!": Red flags present (e.g. unrealistically high pay for short miles, over $3.00/mile, suspicious store/distance ratio, or "too good to be true").
+
+2. SHOP & DELIVER ORDERS (Instacart, Shipt, DoorDash/Uber Shop Runs):
+   - LARGE SHOPS (15+ Items):
+     * BASE REQUIREMENT: Must meet a minimum of $1.00 per item + $1.00 per mile.
+     * "BANGER!" / "SOLID": Meets or exceeds $1.00/item + $1.00/mile AND offers great overall time/value.
+     * "MEH" / "DESPERATE": Total pay drops below $1.00/item + $1.00/mile, or high item count (30+) with low pay per item.
+   - SMALL SHOPS (< 15 Items):
+     * BASE REQUIREMENT: Focus heavily on Pay-per-Mile ($1.50–$2.00+/mile) AND must meet at least $1.25 per item.
+     * "BANGER!" / "SOLID": High pay-per-mile ratio (e.g. $15 for 3 miles and 5 items).
+     * "MEH" / "DESPERATE": Pay per item is under $1.25/item or low mileage pay.
+   - "SUS!": Abnormally low pay for high effort (e.g. $7 for 15 items and 8 miles) OR suspicious/unrealistic payouts.
+
+---
 
 Extract the details and return ONLY a valid JSON object with no markdown formatting:
 {
@@ -496,22 +511,22 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 5 word max sentence funny/punchy/witty explanation with attitude explaining WHY you chose this specific rank"
+  "reason": "Max 5 word funny/punchy sentence with attitude explaining WHY you chose this rank."
 }
 
 Rules:
 1. "pay" is the total earnings payout shown on an offer card. If no dollar payout is visible on this screen, set "pay" to 0.00.
-2. "miles" is the distance miles shown on an offer card. If no distance is visible on this screen, set "miles" to 0.0.
+2. "miles" is the distance in miles shown on an offer card. If no distance is visible on this screen, set "miles" to 0.0.
 3. "merchant" is the pickup store/restaurant. If unknown, set to "".
 4. "stops" is the number of pickups + dropoffs / order stops.
-5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
-6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
+5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted items, or ID verification required.
+6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver, or Instacart/Shipt shopping.
 7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run.
-8. "item_count" is the total number of items or units shown if it is a shop & deliver or grocery order. Hign item count could be a bad orderif total pay is less than $1 per item + $1 per mile
+8. "item_count" is the total number of items or units shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
-10. "rank" MUST be determined by you using the RANKING RULES above.
-11. "reason" MUST be a single punchy, funny, witty 5 word max sentence directly explaining why your assigned "rank" fits this payout, use abreviations and numbers to save space and keep character count low`;
-
+10. "rank" MUST be determined using the RANKING RULES above.
+11. "reason" MUST be a single punchy, funny, witty MAX 5-WORD sentence directly explaining why your assigned "rank" fits this payout. Use abbreviations and numbers to keep character count extremely low.
+      
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
