@@ -507,10 +507,10 @@ Rules:
 5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
 6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
 7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run.
-8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
+8. "item_count" is the total number of items or units shown if it is a shop & deliver or grocery order. Hign item count could be a bad orderif total pay is less than $1 per item + $1 per mile
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined by you using the RANKING RULES above.
-11. "reason" MUST be a single punchy, funny, witty 5 word max sentence directly explaining why your assigned "rank" fits this payout.`;
+11. "reason" MUST be a single punchy, funny, witty 5 word max sentence directly explaining why your assigned "rank" fits this payout, use abreviations and numbers to save space and keep character count low`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
