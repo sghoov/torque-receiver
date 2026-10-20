@@ -447,7 +447,7 @@ app.get('/live', async (req, res) => {
 });
 
 // =========================================================================
-// AI OFFER CARD PARSER (/parse-offer) WITH SINGLE JSON OUTPUT
+// AI OFFER CARD PARSER (/parse-offer) WITH UNIFIED JSON OUTPUT
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
     try {
@@ -471,7 +471,7 @@ Extract the details and evaluate the offer quality using the ranking rules below
 1. "BANGER!" - High payout, high rate per mile ($2.00+/mile), short time commitment, or great overall offer value.
 2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reliable merchant, reasonable distance.
 3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer.
-4. "DESPERATE" - Low payout (<$1.00/mile), long distance, high effort. You can also use spooky Halloween terms like "SCARY" or "GHOST TOWN" with attitude!
+4. "DESPERATE" - Low payout (<$1.00/mile), long distance, high effort. You can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!
 5. "SUS!" - Red flags present (e.g. extremely low pay for high miles, suspicious store/distance ratio, multi-stop nightmare).
 
 Extract the details and return ONLY a valid JSON object with no markdown formatting:
