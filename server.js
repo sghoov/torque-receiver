@@ -905,6 +905,8 @@ app.post('/api/toteboard/reset', async (req, res) => {
 // =========================================================================
 // AUTOMATIC SCANNING/CHARGING DATA CLEANUP WATCHER
 // =========================================================================
+let lastCleanedStatus = "";
+
 async function checkAndCleanScanningStatus() {
     try {
         const fileDownload = await dbx.filesDownload({ path: '/status.txt' });
@@ -914,7 +916,10 @@ async function checkAndCleanScanningStatus() {
             
         let status = String(contents).trim().toLowerCase();
 
-        if (status === 'scanning' || status === 'charging') {
+        // Only clear ONCE when transitioning INTO scanning or charging mode
+        if ((status === 'scanning' || status === 'charging') && lastCleanedStatus !== status) {
+            lastCleanedStatus = status;
+
             const emptyItemsObject = {
                 status: "DELIVERING",
                 items: []
@@ -937,6 +942,8 @@ async function checkAndCleanScanningStatus() {
             for (const file of clearFiles) {
                 await uploadToDropbox(file.name, file.content);
             }
+        } else if (status !== 'scanning' && status !== 'charging') {
+            lastCleanedStatus = status;
         }
     } catch (err) {
         // Silent catch if status.txt is momentarily locked or missing
