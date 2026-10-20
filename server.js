@@ -460,7 +460,8 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        // Using explicit snapshot tag for 1.5 Flash
+        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash-latest' });
 
         const prompt = `Analyze this gig delivery offer card or order details screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
@@ -530,4 +531,426 @@ Rules:
 
         // Determine order mode (SHOPPING vs DELIVERING)
         const isShoppingRun = Boolean(
-            parsed
+            parsedData.is_shopping || 
+            parsedData.is_shop_and_deliver || 
+            ['Instacart', 'Shipt'].includes(appName)
+        );
+        const orderStatus = isShoppingRun ? 'SHOPPING' : 'DELIVERING';
+
+        // IS THIS AN INITIAL OFFER CARD PARSE OR JUST AN ITEMS SCREENSHOT?
+        if (payNum > 0 || milesNum > 0) {
+            const friction = {
+                stops: parseInt(parsedData.stops || 1),
+                is_alcohol: Boolean(parsedData.is_alcohol),
+                is_shop_and_deliver: Boolean(parsedData.is_shop_and_deliver),
+                item_count: parseInt(parsedData.item_count || 0)
+            };
+
+            const pay = payNum.toFixed(2);
+            const miles = milesNum.toFixed(1);
+            const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
+
+            let currentStats = await getShiftStatsFromDropbox();
+
+            let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+            let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+
+            let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+            let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+
+            let newGrandTotal = (existingGrandTotal + payNum).toFixed(2);
+            let newTotalMiles = (existingTotalMiles + milesNum).toFixed(1);
+
+            currentStats.grand_total = newGrandTotal;
+            currentStats.total_miles = newTotalMiles;
+            currentStats.last_offer = {
+                appName,
+                merchant: merchant || "DELIVERY OFFER",
+                pay: `$${pay}`,
+                miles,
+                rank,
+                reason,
+                friction,
+                orderStatus,
+                items: parsedItems,
+                themeColor: theme.color,
+                logoFilename: theme.logoFilename
+            };
+
+            if (tipNum > 0) {
+                currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + tipNum).toFixed(2);
+            }
+
+            const offerRecord = {
+                id: Date.now(),
+                appName,
+                merchant: merchant || "DELIVERY OFFER",
+                pay: payNum,
+                miles: milesNum,
+                tip: tipNum,
+                rank,
+                reason,
+                friction,
+                orderStatus,
+                items: parsedItems,
+                timestamp: new Date().toISOString()
+            };
+            currentStats.offer_history.push(offerRecord);
+            currentStats.lastUpdated = new Date().toISOString();
+
+            const itemsPayload = {
+                status: orderStatus,
+                items: parsedItems
+            };
+
+            const currentOfferPayload = {
+                pay: `$${pay}`,
+                miles: miles,
+                merchant: merchant || "DELIVERY OFFER",
+                rank: rank,
+                reason: reason,
+                timestamp: Date.now()
+            };
+
+            const filesToUpload = [
+                { name: 'current_offer.json', content: JSON.stringify(currentOfferPayload, null, 2) },
+                { name: 'total.txt', content: `$${newGrandTotal}` },
+                { name: 'miles.txt', content: newTotalMiles },
+                { name: 'current_items.json', content: JSON.stringify(itemsPayload, null, 2) },
+                { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+            ];
+
+            for (const file of filesToUpload) {
+                await uploadToDropbox(file.name, file.content);
+            }
+
+            await copyDropboxLogo(theme.logoFilename);
+
+            return res.json({
+                status: 'success',
+                type: 'OFFER_CARD',
+                data: { appName, merchant: merchant || "DELIVERY OFFER", pay: `$${pay}`, miles, rank, reason, friction, orderStatus, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+            });
+        } 
+        else {
+            // ITEMS-ONLY SCREENSHOT SAFEGUARD
+            let existingItemsObj = await getCurrentItemsFromDropbox();
+            let mergedItems = Array.isArray(existingItemsObj.items) ? [...existingItemsObj.items] : [];
+
+            parsedItems.forEach(newItem => {
+                const clean = newItem.trim();
+                if (clean && !mergedItems.includes(clean)) {
+                    mergedItems.push(clean);
+                }
+            });
+
+            const itemsPayload = {
+                status: orderStatus,
+                items: mergedItems
+            };
+
+            await uploadToDropbox('current_items.json', JSON.stringify(itemsPayload, null, 2));
+            console.log(`[Parse Offer] Item screenshot processed safely (${mergedItems.length} items total). Main offer card untouched.`);
+
+            return res.json({
+                status: 'success',
+                type: 'ITEMS_ONLY',
+                data: { orderStatus, items: mergedItems }
+            });
+        }
+
+    } catch (err) {
+        console.error('AI Offer Parsing Error Detail:', err.message || err);
+        res.status(500).json({ error: 'Failed to parse offer card screenshot', details: err.message });
+    }
+});
+
+// =========================================================================
+// REMOVE LAST OFFER ENDPOINT (/remove-offer)
+// =========================================================================
+app.post('/remove-offer', async (req, res) => {
+    try {
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (!currentStats.offer_history || currentStats.offer_history.length === 0) {
+            return res.json({
+                status: 'error',
+                message: 'No recent offer found in history to remove.'
+            });
+        }
+
+        const lastOffer = currentStats.offer_history.pop();
+
+        let baseGrandTotal = parseFloat(currentStats.grand_total || 0);
+        let baseTotalMiles = parseFloat(currentStats.total_miles || 0);
+
+        let existingGrandTotal = await readDropboxFloat('/total.txt', baseGrandTotal);
+        let existingTotalMiles = await readDropboxFloat('/miles.txt', baseTotalMiles);
+
+        let newGrandTotal = Math.max(0, existingGrandTotal - lastOffer.pay).toFixed(2);
+        let newTotalMiles = Math.max(0, existingTotalMiles - lastOffer.miles).toFixed(1);
+
+        currentStats.grand_total = newGrandTotal;
+        currentStats.total_miles = newTotalMiles;
+        if (lastOffer.tip > 0) {
+            currentStats.app_tips = Math.max(0, parseFloat(currentStats.app_tips || 0) - lastOffer.tip).toFixed(2);
+        }
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const emptyItemsObject = {
+            status: "DELIVERING",
+            items: []
+        };
+
+        const emptyOfferObject = {
+            pay: "\$0.00",
+            miles: "0.0",
+            merchant: "[CANCELED]",
+            rank: "NONE",
+            reason: "",
+            timestamp: Date.now()
+        };
+
+        const filesToUpload = [
+            { name: 'current_offer.json', content: JSON.stringify(emptyOfferObject, null, 2) },
+            { name: 'total.txt', content: `$${newGrandTotal}` },
+            { name: 'miles.txt', content: newTotalMiles },
+            { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) },
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            message: `Removed $${lastOffer.pay.toFixed(2)} / ${lastOffer.miles} mi (${lastOffer.merchant})`,
+            data: {
+                removedOffer: lastOffer,
+                newGrandTotal: `$${newGrandTotal}`,
+                newTotalMiles
+            }
+        });
+
+    } catch (err) {
+        console.error('Remove Offer Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to remove last offer', details: err.message });
+    }
+});
+
+// =========================================================================
+// MANUAL TIP RECEIVER (/add-tip)
+// =========================================================================
+app.post('/add-tip', async (req, res) => {
+    try {
+        const { amount } = req.body;
+        const tipAmount = parseFloat(amount || 0);
+
+        if (isNaN(tipAmount) || tipAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid tip amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        const updatedAppTips = (parseFloat(currentStats.app_tips || 0) + tipAmount).toFixed(2);
+        const updatedGrandTotal = (parseFloat(currentStats.grand_total || 0) + tipAmount).toFixed(2);
+
+        currentStats.app_tips = updatedAppTips;
+        currentStats.grand_total = updatedGrandTotal;
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: {
+                app_tips: updatedAppTips,
+                stream_tips: currentStats.stream_tips || "0.00",
+                grand_total: `$${updatedGrandTotal}`
+            }
+        });
+
+    } catch (err) {
+        console.error('Add Tip Error:', err.message || err);
+        res.status(500).json({ error: 'Failed to record tip' });
+    }
+});
+
+// =========================================================================
+// PAPA GIGS TOTE BOARD API ENDPOINTS
+// =========================================================================
+
+// 1. Fetch live tote board stats with CORS & per-app calculation
+app.get('/api/toteboard', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
+
+    try {
+        let stats = await getShiftStatsFromDropbox();
+        
+        let appsBreakdown = {
+            "DoorDash": 0,
+            "Uber Eats": 0,
+            "Instacart": 0,
+            "Amazon Flex": 0,
+            "Shipt": 0,
+            "Roadie": 0
+        };
+
+        if (Array.isArray(stats.offer_history)) {
+            stats.offer_history.forEach(offer => {
+                const name = offer.appName || 'Other';
+                const pay = parseFloat(offer.pay || 0);
+                if (appsBreakdown.hasOwnProperty(name)) {
+                    appsBreakdown[name] += pay;
+                } else {
+                    appsBreakdown[name] = pay;
+                }
+            });
+        }
+
+        res.json({
+            gross_earnings: parseFloat(stats.grand_total || 0),
+            miles: parseFloat(stats.total_miles || 0),
+            app_tips: parseFloat(stats.app_tips || 0),
+            other_donations: parseFloat(stats.other_donations || 0),
+            superchats: parseFloat(stats.superchats || 0),
+            jewels: parseInt(stats.jewels || 0),
+            members: parseInt(stats.members || 0),
+            subs: parseInt(stats.subs || 0),
+            shift_start_subs: stats.shift_start_subs,
+            apps_breakdown: appsBreakdown,
+            offer_history: stats.offer_history || [],
+            last_updated: stats.lastUpdated || new Date().toISOString()
+        });
+    } catch (err) {
+        console.error('Tote board stats fetch error:', err.message || err);
+        res.status(500).json({ error: 'Failed to fetch tote board metrics' });
+    }
+});
+
+// 2. Add manual tips/donations via iOS Shortcut or API
+app.post('/api/toteboard/add-donation', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const { type, amount } = req.body;
+        const addAmount = parseFloat(amount || 0);
+
+        if (isNaN(addAmount) || addAmount <= 0) {
+            return res.status(400).json({ error: 'Invalid donation amount' });
+        }
+
+        let currentStats = await getShiftStatsFromDropbox();
+
+        if (type === 'app_tip') {
+            currentStats.app_tips = (parseFloat(currentStats.app_tips || 0) + addAmount).toFixed(2);
+        } else if (type === 'superchat') {
+            currentStats.superchats = (parseFloat(currentStats.superchats || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        } else if (type === 'jewel') {
+            currentStats.jewels = (parseInt(currentStats.jewels || 0) + parseInt(addAmount));
+        } else if (type === 'member' || type === 'membership') {
+            currentStats.members = (parseInt(currentStats.members || 0) + parseInt(addAmount));
+        } else if (type === 'sub' || type === 'subscriber') {
+            const currentSubCount = parseInt(currentStats.subs || 0) + parseInt(addAmount);
+            currentStats.subs = currentSubCount;
+
+            if (currentStats.shift_start_subs !== undefined && currentStats.shift_start_subs !== null) {
+                currentStats.shift_start_subs = parseInt(currentStats.shift_start_subs) - parseInt(addAmount);
+            }
+        } else {
+            currentStats.other_donations = (parseFloat(currentStats.other_donations || 0) + addAmount).toFixed(2);
+            currentStats.grand_total = (parseFloat(currentStats.grand_total || 0) + addAmount).toFixed(2);
+        }
+
+        currentStats.lastUpdated = new Date().toISOString();
+
+        const filesToUpload = [
+            { name: 'shift_stats.json', content: JSON.stringify(currentStats, null, 2) }
+        ];
+
+        for (const file of filesToUpload) {
+            await uploadToDropbox(file.name, file.content);
+        }
+
+        res.json({
+            status: 'success',
+            data: currentStats
+        });
+    } catch (err) {
+        console.error('Tote board add donation error:', err.message || err);
+        res.status(500).json({ error: 'Failed to add donation' });
+    }
+});
+
+// 3. Reset Tote Board totals ONLY (Keeps Torque vehicle telemetry & trip clock intact!)
+app.post('/api/toteboard/reset', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        const resetStats = await executeShiftReset();
+        console.log('[Tote Board Reset] Cleared shift earnings & offer history (Car telemetry untouched)');
+        res.json({ status: 'success', data: resetStats });
+    } catch (err) {
+        console.error('Tote board reset error:', err.message || err);
+        res.status(500).json({ error: 'Failed to reset tote board' });
+    }
+});
+
+// =========================================================================
+// AUTOMATIC SCANNING/CHARGING DATA CLEANUP WATCHER
+// =========================================================================
+async function checkAndCleanScanningStatus() {
+    try {
+        const fileDownload = await dbx.filesDownload({ path: '/status.txt' });
+        let contents = fileDownload.result.fileBinary 
+            ? Buffer.from(fileDownload.result.fileBinary).toString('utf-8') 
+            : fileDownload.result.fileBinary;
+            
+        let status = String(contents).trim().toLowerCase();
+
+        if (status === 'scanning' || status === 'charging') {
+            const emptyItemsObject = {
+                status: "DELIVERING",
+                items: []
+            };
+
+            const emptyOfferObject = {
+                pay: "\$0.00",
+                miles: "0.0",
+                merchant: "READY",
+                rank: "NONE",
+                reason: "",
+                timestamp: Date.now()
+            };
+
+            const clearFiles = [
+                { name: 'current_offer.json', content: JSON.stringify(emptyOfferObject, null, 2) },
+                { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) }
+            ];
+
+            for (const file of clearFiles) {
+                await uploadToDropbox(file.name, file.content);
+            }
+        }
+    } catch (err) {
+        // Silent catch if status.txt is momentarily locked or missing
+    }
+}
+
+// Poll status.txt every 3 seconds to clear old offer data when scanning
+setInterval(checkAndCleanScanningStatus, 3000);
+
+// =========================================================================
+// SERVER LISTEN
+// =========================================================================
+const PORT = process.env.PORT || 10000;
+http.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
+});
