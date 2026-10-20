@@ -460,7 +460,6 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        // Reverted to your exact working Gemini model string
         const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
         const prompt = `Analyze this gig delivery offer card or order details screenshot from one of these platforms: 
@@ -947,10 +946,29 @@ async function checkAndCleanScanningStatus() {
 // Poll status.txt every 3 seconds to clear old offer data when scanning
 setInterval(checkAndCleanScanningStatus, 3000);
 
+// Ensure current_offer.json exists on Dropbox immediately on startup
+async function initCurrentOfferJson() {
+    try {
+        await dbx.filesGetMetadata({ path: '/current_offer.json' });
+    } catch (e) {
+        console.log('[Startup] /current_offer.json missing on Dropbox, initializing base file...');
+        const initialOffer = {
+            pay: "\$0.00",
+            miles: "0.0",
+            merchant: "READY",
+            rank: "NONE",
+            reason: "",
+            timestamp: Date.now()
+        };
+        await uploadToDropbox('current_offer.json', JSON.stringify(initialOffer, null, 2));
+    }
+}
+
 // =========================================================================
 // SERVER LISTEN
 // =========================================================================
 const PORT = process.env.PORT || 10000;
-http.listen(PORT, () => {
+http.listen(PORT, async () => {
     console.log(`Server listening on port ${PORT}`);
+    await initCurrentOfferJson();
 });
