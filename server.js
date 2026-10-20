@@ -219,6 +219,10 @@ async function executeShiftReset() {
     };
 
     const resetFiles = [
+        { name: 'current_offer.txt', content: '\$0.00' },
+        { name: 'offer_miles.txt', content: '0.0' },
+        { name: 'merchant_name.txt', content: 'READY' },
+        { name: 'offer_rank.txt', content: 'NONE' },
         { name: 'current_offer.json', content: JSON.stringify(emptyOfferObject, null, 2) },
         { name: 'total.txt', content: '\$0.00' },
         { name: 'miles.txt', content: '0.0' },
@@ -446,8 +450,79 @@ app.get('/live', async (req, res) => {
     }
 });
 
+// Helper function to calculate weighted rank considering friction factors & strict app-level SUS detection
+function calculateContextualRank(pay, miles, friction, appName = "DoorDash") {
+    if (pay <= 0) return "NONE";
+
+    const cleanApp = String(appName || '').toLowerCase();
+
+    const isExcludedApp = cleanApp.includes("amazon") || 
+                          cleanApp.includes("flex") || 
+                          cleanApp.includes("roadie") || 
+                          cleanApp.includes("instacart") || 
+                          cleanApp.includes("insta") || 
+                          cleanApp.includes("shipt");
+
+    const isDoorDashOrUber = cleanApp.includes("doordash") || 
+                             cleanApp.includes("uber") || 
+                             cleanApp === "dd" || 
+                             cleanApp === "ue";
+
+    if (isDoorDashOrUber && !isExcludedApp && !friction.is_shop_and_deliver) {
+        if (miles > 0) {
+            const rawRate = pay / miles;
+            if (rawRate >= 7.00 || (pay >= 25.00 && miles <= 3.5)) {
+                return "SUS!";
+            }
+        } else if (pay >= 15.00) {
+            return "SUS!";
+        }
+    }
+
+    if (miles <= 0) {
+        return pay >= 15.00 ? "BANGER!" : "SOLID";
+    }
+
+    let effectivePay = pay;
+    let rateDeduction = 0.0;
+
+    const stops = friction.stops || 1;
+    if (stops === 2) {
+        rateDeduction += 0.50;
+    } else if (stops >= 3) {
+        rateDeduction += 1.25;
+    }
+
+    if (friction.is_alcohol) {
+        effectivePay -= 1.50;
+    }
+
+    if (friction.is_shop_and_deliver) {
+        const items = friction.item_count || 1;
+        if (items > 20) {
+            rateDeduction += 1.00;
+        } else if (items > 10) {
+            rateDeduction += 0.50;
+        } else {
+            rateDeduction += 0.25;
+        }
+    }
+
+    const finalEffectiveRate = Math.max(0, (effectivePay / miles) - rateDeduction);
+
+    if (pay >= 20.00 && finalEffectiveRate >= 3.00) {
+        return "BANGER!";
+    } else if (pay >= 6.00 && finalEffectiveRate >= 2.00) {
+        return "SOLID";
+    } else if (pay < 6.00 && finalEffectiveRate >= 2.00) {
+        return "MEH";
+    } else {
+        return "DESPERATE";
+    }
+}
+
 // =========================================================================
-// AI OFFER CARD PARSER (/parse-offer) WITH UNIFIED JSON OUTPUT
+// AI OFFER CARD PARSER (/parse-offer) WITH SAFEGUARD FOR ITEMS-ONLY SCREENS
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
     try {
@@ -460,19 +535,14 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
 
         const prompt = `Analyze this gig delivery offer card or order details screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
 
-Extract the details and evaluate the offer quality using the ranking rules below.
-
-### RANKING RULES:
-1. "BANGER!" - High payout, high rate per mile ($2.00+/mile), short time commitment, or great overall offer value.
-2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reliable merchant, reasonable distance.
-3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer.
-4. "DESPERATE" - Low payout (<$1.00/mile), long distance, high effort. You can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!
-5. "SUS!" - Red flags present (e.g. extremely low pay for high miles, suspicious store/distance ratio, multi-stop nightmare).
+This screenshot could be EITHER:
+A) An initial offer acceptance card (showing payout price, distance miles, and merchant).
+B) An order items / itemized shopping list screen (showing food/grocery items).
 
 Extract the details and return ONLY a valid JSON object with no markdown formatting:
 {
@@ -487,22 +557,20 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "is_shopping": false,
   "item_count": 0,
   "items": [],
-  "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 1-sentence funny/punchy explanation of why you gave this rating with some attitude"
+  "reason": "Short 1-sentence explanation of why this offer is good, average, low pay, or suspicious"
 }
 
 Rules:
-1. "pay" is the total earnings payout shown on an offer card. If no dollar payout is visible, set "pay" to 0.00.
-2. "miles" is the distance miles shown on an offer card. If no distance is visible, set "miles" to 0.0.
+1. "pay" is the total earnings payout shown on an offer card. If no dollar payout is visible on this screen, set "pay" to 0.00.
+2. "miles" is the distance miles shown on an offer card. If no distance is visible on this screen, set "miles" to 0.0.
 3. "merchant" is the pickup store/restaurant. If unknown, set to "".
 4. "stops" is the number of pickups + dropoffs / order stops.
 5. "is_alcohol" is true if the offer mentions alcohol, wine, beer, restricted item or ID verification required.
 6. "is_shop_and_deliver" is true if it requires red card shopping, grocery picking, shop & deliver or Instacart/Shipt shopping.
 7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run.
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
-9. "items" is an array of strings containing ONLY primary food menu items or grocery items with quantities.
-10. "rank" MUST be one of: "BANGER!", "SOLID", "MEH", "DESPERATE", "SCARY", or "SUS!".
-11. "reason" is a brief 1-sentence explanation for the rating.`;
+9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
+10. "reason" is a punchy 1-sentence explanation for the offer rating.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -520,15 +588,12 @@ Rules:
         const payNum = parseFloat(parsedData.pay || 0);
         const milesNum = parseFloat(parsedData.miles || 0);
         const tipNum = parseFloat(parsedData.tip || 0);
-        const rank = (parsedData.rank || 'NONE').toUpperCase();
         const reason = parsedData.reason || '';
 
-        // Clean & Filter Parsed Items Array
         const parsedItems = Array.isArray(parsedData.items)
             ? parsedData.items.map(i => String(i).trim()).filter(Boolean)
             : [];
 
-        // Determine order mode (SHOPPING vs DELIVERING)
         const isShoppingRun = Boolean(
             parsedData.is_shopping || 
             parsedData.is_shop_and_deliver || 
@@ -536,7 +601,6 @@ Rules:
         );
         const orderStatus = isShoppingRun ? 'SHOPPING' : 'DELIVERING';
 
-        // IS THIS AN INITIAL OFFER CARD PARSE OR JUST AN ITEMS SCREENSHOT?
         if (payNum > 0 || milesNum > 0) {
             const friction = {
                 stops: parseInt(parsedData.stops || 1),
@@ -545,6 +609,7 @@ Rules:
                 item_count: parseInt(parsedData.item_count || 0)
             };
 
+            const calculatedRank = calculateContextualRank(payNum, milesNum, friction, appName);
             const pay = payNum.toFixed(2);
             const miles = milesNum.toFixed(1);
             const theme = APP_THEMES[appName] || { color: "#FF3008", logoFilename: "dd logo.png" };
@@ -567,7 +632,7 @@ Rules:
                 merchant: merchant || "DELIVERY OFFER",
                 pay: `$${pay}`,
                 miles,
-                rank,
+                rank: calculatedRank,
                 reason,
                 friction,
                 orderStatus,
@@ -587,7 +652,7 @@ Rules:
                 pay: payNum,
                 miles: milesNum,
                 tip: tipNum,
-                rank,
+                rank: calculatedRank,
                 reason,
                 friction,
                 orderStatus,
@@ -606,12 +671,16 @@ Rules:
                 pay: `$${pay}`,
                 miles: miles,
                 merchant: merchant || "DELIVERY OFFER",
-                rank: rank,
+                rank: calculatedRank,
                 reason: reason,
                 timestamp: Date.now()
             };
 
             const filesToUpload = [
+                { name: 'current_offer.txt', content: `$${pay}` },
+                { name: 'offer_miles.txt', content: miles },
+                { name: 'merchant_name.txt', content: merchant || "DELIVERY OFFER" },
+                { name: 'offer_rank.txt', content: calculatedRank },
                 { name: 'current_offer.json', content: JSON.stringify(currentOfferPayload, null, 2) },
                 { name: 'total.txt', content: `$${newGrandTotal}` },
                 { name: 'miles.txt', content: newTotalMiles },
@@ -628,11 +697,10 @@ Rules:
             return res.json({
                 status: 'success',
                 type: 'OFFER_CARD',
-                data: { appName, merchant: merchant || "DELIVERY OFFER", pay: `$${pay}`, miles, rank, reason, friction, orderStatus, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+                data: { appName, merchant: merchant || "DELIVERY OFFER", pay: `$${pay}`, miles, rank: calculatedRank, reason, friction, orderStatus, items: parsedItems, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
             });
         } 
         else {
-            // ITEMS-ONLY SCREENSHOT SAFEGUARD
             let existingItemsObj = await getCurrentItemsFromDropbox();
             let mergedItems = Array.isArray(existingItemsObj.items) ? [...existingItemsObj.items] : [];
 
@@ -711,6 +779,10 @@ app.post('/remove-offer', async (req, res) => {
         };
 
         const filesToUpload = [
+            { name: 'current_offer.txt', content: '\$0.00' },
+            { name: 'offer_miles.txt', content: '0.0' },
+            { name: 'merchant_name.txt', content: '[CANCELED]' },
+            { name: 'offer_rank.txt', content: 'NONE' },
             { name: 'current_offer.json', content: JSON.stringify(emptyOfferObject, null, 2) },
             { name: 'total.txt', content: `$${newGrandTotal}` },
             { name: 'miles.txt', content: newTotalMiles },
@@ -916,7 +988,6 @@ async function checkAndCleanScanningStatus() {
             
         let status = String(contents).trim().toLowerCase();
 
-        // Only clear ONCE when transitioning INTO scanning or charging mode
         if ((status === 'scanning' || status === 'charging') && lastCleanedStatus !== status) {
             lastCleanedStatus = status;
 
@@ -935,6 +1006,10 @@ async function checkAndCleanScanningStatus() {
             };
 
             const clearFiles = [
+                { name: 'current_offer.txt', content: '\$0.00' },
+                { name: 'offer_miles.txt', content: '0.0' },
+                { name: 'merchant_name.txt', content: 'READY' },
+                { name: 'offer_rank.txt', content: 'NONE' },
                 { name: 'current_offer.json', content: JSON.stringify(emptyOfferObject, null, 2) },
                 { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) }
             ];
@@ -953,29 +1028,10 @@ async function checkAndCleanScanningStatus() {
 // Poll status.txt every 3 seconds to clear old offer data when scanning
 setInterval(checkAndCleanScanningStatus, 3000);
 
-// Ensure current_offer.json exists on Dropbox immediately on startup
-async function initCurrentOfferJson() {
-    try {
-        await dbx.filesGetMetadata({ path: '/current_offer.json' });
-    } catch (e) {
-        console.log('[Startup] /current_offer.json missing on Dropbox, initializing base file...');
-        const initialOffer = {
-            pay: "\$0.00",
-            miles: "0.0",
-            merchant: "READY",
-            rank: "NONE",
-            reason: "",
-            timestamp: Date.now()
-        };
-        await uploadToDropbox('current_offer.json', JSON.stringify(initialOffer, null, 2));
-    }
-}
-
 // =========================================================================
 // SERVER LISTEN
 // =========================================================================
-const PORT = process.env.PORT || 10000;
-http.listen(PORT, async () => {
+const PORT = process.env.PORT || 3000;
+http.listen(PORT, () => {
     console.log(`Server listening on port ${PORT}`);
-    await initCurrentOfferJson();
 });
