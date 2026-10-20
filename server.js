@@ -476,11 +476,11 @@ B) An order items / itemized shopping list screen (showing food/grocery items).
 Extract the details and evaluate the offer quality using the ranking rules below.
 
 ### RANKING RULES:
-1. "BANGER!" - High payout, high rate per mile ($2.00+/mile), short time commitment, or great overall offer value.
+1. "BANGER!" - High payout over $16, high rate per mile ($2.00+/mile), short time commitment, or great overall offer value.
 2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reliable merchant, reasonable distance.
-3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer.
-4. "DESPERATE" - Low payout (<$1.00/mile), long distance, high effort, or terrible pay for distance. You can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!
-5. "SUS!" - Red flags present (e.g. unrealistically high pay for short miles, suspicious store/distance ratio, or multi-stop nightmare).
+3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer. multiple stops
+4. "DESPERATE" - Low payout (<$1.00/mile), long distance, high effort, 3 or more stops, or terrible pay for distance. You can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!
+5. "SUS!" - Red flags present (e.g. unrealistically high pay for short miles, in excess of $3 a mile, suspicious store/distance ratio, like too good to be true.)
 
 Extract the details and return ONLY a valid JSON object with no markdown formatting:
 {
@@ -496,7 +496,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 1-sentence funny/punchy explanation with attitude explaining WHY you chose this specific rank"
+  "reason": "Short 5 word max sentence funny/punchy/witty explanation with attitude explaining WHY you chose this specific rank"
 }
 
 Rules:
@@ -510,7 +510,7 @@ Rules:
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined by you using the RANKING RULES above.
-11. "reason" MUST be a single punchy, funny, witty 8 word max sentence directly explaining why your assigned "rank" fits this payout.`;
+11. "reason" MUST be a single punchy, funny, witty 5 word max sentence directly explaining why your assigned "rank" fits this payout.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
