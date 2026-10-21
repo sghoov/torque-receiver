@@ -516,7 +516,7 @@ Rules:
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined by you using the RANKING RULES and the $1/item shopping threshold above.
-11. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for the next holiday as if written by a smart savvy brain-rot teen directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. SCARY for Halloween time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, avoid over using the term bogus try drag or downer, use the term bruh, jive turkey, use the type of humor you might see on Saturday Night Live.`;
+11. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Halloween as if written by a smart savvy brain-rot teen directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. SCARY for Halloween time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, avoid over using the term bogus try drag or downer, use the term bruh, jive turkey, use the type of humor you might see on Saturday Night Live.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
