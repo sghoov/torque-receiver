@@ -525,8 +525,8 @@ Rules:
 8. "item_count" is the total number of items or units shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined using the RANKING RULES above.
-11. "reason" MUST be a single punchy, funny, witty MAX 5-WORD sentence directly explaining why your assigned "rank" fits this payout. Use abbreviations and numbers to keep character count extremely low.`;
-
+11. "reason" MUST be a single punchy, funny, witty MAX 5-WORD sentence directly explaining why your assigned "rank" fits this payout. Use abbreviations and numbers to keep character count extremely low
+`;
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
