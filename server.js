@@ -482,11 +482,11 @@ For Shop & Deliver, Grocery, Instacart, or Shipt orders where an item count is p
 - If an order has a high item count (e.g., 20+ items) and pays LESS than $1.00 per item (e.g., $15 pay for 45 items), it CANNOT be a "BANGER!" or "SOLID" regardless of low mileage. Rank it as "MEH", "DESPERATE", or "SUS!" depending on severity.
 
 ### GENERAL RANKING RULES:
-1. "BANGER!" - High overall payout, high pay-per-mile ($2.00+/mile), AND for shops must meet at least ~$1.00/item pay. Exceptional overall value for time/effort.
+1. "BANGER!" - High overall payout exceeeding $17, high pay-per-mile ($2.00+/mile), AND for shops must meet at least ~$1.00/item pay. Exceptional overall value for time/effort.
 2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reasonable distance, and for shops meets ~$1.00/item minimum.
-3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer, or a grocery shop that pays under $1.00/item despite decent mileage.
-4. "DESPERATE" - Low payout (<$1.00/mile), high item count with tiny pay, long distance, or terrible payout for time commitment. (Can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!).
-5. "SUS!" - Major red flags (e.g., unrealistically high pay for short miles, extreme item count for tiny pay, suspicious store/distance ratio, or multi-stop nightmare).
+3. "MEH" - Borderline payout ($1.01 - $1.50/mile), average offer, or a grocery shop that pays under $1.00/item despite decent mileage.
+4. "DESPERATE" - Low payout ($1.00/mile or less), high item count with tiny pay usually less than $1 per item, long distance, or terrible payout for time commitment. (Can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!).
+5. "SUS!" - Major red flags (e.g., unrealistically high pay for short miles, 1 - 3 item shop for over $30 or similar high pay for low effort). 
 
 Extract the details and return ONLY a valid JSON object with no markdown formatting:
 {
@@ -516,7 +516,7 @@ Rules:
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined by you using the RANKING RULES and the $1/item shopping threshold above.
-11. "reason" MUST be a single punchy, funny, witty 5 word max sentence directly explaining why your assigned "rank" fits this payout and item effort.`;
+11. "reason" MUST be a single punchy, funny, witty 5 word max sentence as if written by a smart savvy teen from the 1970s directly explaining why your assigned "rank" fits this payout and item effort.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
