@@ -502,7 +502,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 1-sentence funny/punchy explanation with attitude explaining WHY you chose this specific rank"
+  "reason": "Short 5 word max sentence funny/punchy/witty explanation with attitude explaining WHY you chose this specific rank"
 }
 
 Rules:
@@ -516,7 +516,7 @@ Rules:
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined by you using the RANKING RULES and the $1/item shopping threshold above.
-11. "reason" MUST be a single punchy, funny, witty 8 word max sentence directly explaining why your assigned "rank" fits this payout and item effort.`;
+11. "reason" MUST be a single punchy, funny, witty 5 word max sentence directly explaining why your assigned "rank" fits this payout and item effort.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
