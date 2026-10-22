@@ -484,6 +484,7 @@ Extract the details and evaluate the offer quality using the ranking rules below
   - Taco Bell -> "Taco Smell"
   - Burger King -> "Burger Schwing"
   - Chick-fil-A -> "Sic-Filet"
+  - Jack in the Box -> "Jack in the Crack"
 - Use spooktacular Halloween-themed terms when applicable (e.g. SCARY, GHOULISH, TRICK OR TREAT, MUMMY, WITCHY, BLOODY, SLIMEY).
 
 ### MILEAGE & PAY THRESHOLD RULES:
@@ -496,7 +497,7 @@ For Shop & Deliver, Grocery, Instacart, or Shipt orders where an item count is p
 - If an order has a high item count (e.g., 20+ items) and pays LESS than $1.00 per item (e.g., $15 pay for 45 items), it CANNOT be a "BANGER!" or "SOLID" regardless of low mileage. Rank it as "MEH", "DESPERATE", or "SUS!" depending on severity.
 
 ### GENERAL RANKING RULES:
-1. "BANGER!" - High overall payout, high pay-per-mile ($2.00+/mile), AND for shops must meet at least ~$1.00/item pay. Exceptional overall value for time/effort.
+1. "BANGER!" - High overall payout MINIMUM PAYOUT OF AT LEAST $17.00 and higher, high pay-per-mile ($2.49+/mile), AND for shops must meet at least ~$1.00/item pay. Exceptional overall value for time/effort.
 2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reasonable distance, and for shops meets ~$1.00/item minimum.
 3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer, or a grocery shop that pays under $1.00/item despite decent mileage.
 4. "DESPERATE" - Under $1.00/mile payout, high item count with tiny pay, long distance, or terrible payout for time commitment. (Can also use spooky terms like "SCARY" or "GHOST TOWN").
@@ -516,7 +517,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 1-sentence funny/punchy explanation with attitude"
+  "reason": "Short 5 word or less sentence funny/punchy explanation with attitude"
 }
 
 Rules:
