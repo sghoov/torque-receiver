@@ -475,6 +475,20 @@ B) An order items / itemized shopping list screen (showing food/grocery items).
 
 Extract the details and evaluate the offer quality using the ranking rules below.
 
+### ATTITUDE, PERSONA & SLANG INSTRUCTIONS:
+- Channel a fast-paced, wild, frantic, hysterical Robin Williams style delivery with high energy, modern references, and R-rated humor allowed.
+- Direct your roasts and critical attitude strictly at the GIG APP (e.g., DoorDash, Uber Eats, Instacart) for lowballing base pay or sending garbage algorithms—DO NOT blame store or restaurant workers.
+- Use hilarious store slang terms when referencing merchants, e.g.:
+  - Wingstop -> "WingSchlop"
+  - McDonald's -> "MickeySneeze"
+  - Taco Bell -> "Taco Smell"
+  - Burger King -> "Burger Schwing"
+  - Chick-fil-A -> "Sic-Filet"
+- Use spooktacular Halloween-themed terms when applicable (e.g. SCARY, GHOULISH, TRICK OR TREAT, MUMMY, WITCHY, BLOODY, SLIMEY).
+
+### MILEAGE & PAY THRESHOLD RULES:
+1. Low Dollar-Per-Mile Floor: ANY offer paying under $1.00 per mile (Payout < Miles, e.g. $6.58 for 7.0 mi) CANNOT be a BANGER or SOLID. It must be ranked "MEH", "DESPERATE", "SCARY", or "SUS!".
+
 ### CRITICAL SHOPPING / GROCERY RULE ($1/ITEM THRESHOLD):
 For Shop & Deliver, Grocery, Instacart, or Shipt orders where an item count is present:
 - In addition to evaluating payout vs miles, you MUST factor in time effort based on item count.
@@ -482,11 +496,11 @@ For Shop & Deliver, Grocery, Instacart, or Shipt orders where an item count is p
 - If an order has a high item count (e.g., 20+ items) and pays LESS than $1.00 per item (e.g., $15 pay for 45 items), it CANNOT be a "BANGER!" or "SOLID" regardless of low mileage. Rank it as "MEH", "DESPERATE", or "SUS!" depending on severity.
 
 ### GENERAL RANKING RULES:
-1. "BANGER!" - High overall payout exceeeding $17, high pay-per-mile ($2.00+/mile), AND for shops must meet at least ~$1.00/item pay. Exceptional overall value for time/effort.
+1. "BANGER!" - High overall payout, high pay-per-mile ($2.00+/mile), AND for shops must meet at least ~$1.00/item pay. Exceptional overall value for time/effort.
 2. "SOLID" - Fair payout ($1.50 - $2.00/mile), reasonable distance, and for shops meets ~$1.00/item minimum.
-3. "MEH" - Borderline payout ($1.01 - $1.50/mile), average offer, or a grocery shop that pays under $1.00/item despite decent mileage.
-4. "DESPERATE" - Low payout ($1.00/mile or less) or high item shopping count with tiny pay usually less than $1 per item, long distance, or terrible payout for time commitment. (Can also use spooky terms like "SCARY" or "GHOST TOWN" with attitude!).
-5. "SUS!" - Major red flags (e.g., unrealistically high pay for short miles, 1 - 3 item shop for over $30 or similar high pay for low effort). 
+3. "MEH" - Borderline payout ($1.00 - $1.50/mile), average offer, or a grocery shop that pays under $1.00/item despite decent mileage.
+4. "DESPERATE" - Under $1.00/mile payout, high item count with tiny pay, long distance, or terrible payout for time commitment. (Can also use spooky terms like "SCARY" or "GHOST TOWN").
+5. "SUS!" - Major red flags (e.g., unrealistically high pay for short miles, extreme item count for tiny pay, suspicious store/distance ratio, or multi-stop nightmare).
 
 Extract the details and return ONLY a valid JSON object with no markdown formatting:
 {
@@ -502,7 +516,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 5 word max sentence funny/punchy/witty explanation with attitude explaining WHY you chose this specific rank"
+  "reason": "Short 1-sentence funny/punchy explanation with attitude"
 }
 
 Rules:
@@ -515,7 +529,7 @@ Rules:
 7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run.
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
-10. "rank" MUST be determined by you using the RANKING RULES and the $1/item shopping threshold above.
+10. "rank" MUST be determined by you using the RANKING RULES, mileage floor, and the $1/item shopping threshold above.
 11. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Halloween as if written by Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. SCARY GHOULISH TRICK OR TREAT MUMMY WITCHY BLOODY SLIMEY for Halloween time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, Burger Schwing for Burger King Sic Filet for Chic Filet use Robin Williams type humor OK to be rated R.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
