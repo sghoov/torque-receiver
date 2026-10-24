@@ -210,7 +210,7 @@ async function executeShiftReset() {
     };
 
     const emptyOfferObject = {
-        pay: "\$0.00",
+        pay: "$0.00",
         miles: "0.0",
         merchant: "READY",
         rank: "NONE",
@@ -219,12 +219,12 @@ async function executeShiftReset() {
     };
 
     const resetFiles = [
-        { name: 'current_offer.txt', content: '\$0.00' },
+        { name: 'current_offer.txt', content: '$0.00' },
         { name: 'offer_miles.txt', content: '0.0' },
         { name: 'merchant_name.txt', content: 'READY' },
         { name: 'offer_rank.txt', content: 'NONE' },
         { name: 'current_offer.json', content: JSON.stringify(emptyOfferObject, null, 2) },
-        { name: 'total.txt', content: '\$0.00' },
+        { name: 'total.txt', content: '$0.00' },
         { name: 'miles.txt', content: '0.0' },
         { name: 'current_items.json', content: JSON.stringify(emptyItemsObject, null, 2) },
         { name: 'shift_stats.json', content: JSON.stringify(freshStats, null, 2) }
@@ -249,7 +249,7 @@ app.get('/reset-shift', async (req, res) => {
         io.emit('shift_reset');
 
         console.log('[Shift Reset] Shift totals and telemetry successfully cleared.');
-        res.json({ status: 'success', message: 'Shift stats reset to \$0.00 and 0.0 miles!' });
+        res.json({ status: 'success', message: 'Shift stats reset to $0.00 and 0.0 miles!' });
     } catch (err) {
         console.error('Reset Shift Error:', err.message || err);
         res.status(500).json({ error: 'Failed to reset shift', details: err.message });
@@ -336,19 +336,22 @@ app.get('/live', async (req, res) => {
         if (incomingDistanceKm !== null) {
             let parsedMiles = incomingDistanceKm * 0.621371;
             
-            if (!isNaN(parsedMiles) && parsedMiles > 0.01) {
+            if (!isNaN(parsedMiles) && parsedMiles >= 0) {
+                // Glitch Prevention: Block sudden unphysical jumps (e.g., >5 miles in a single update)
                 if (lastKnownRawMiles > 0 && parsedMiles > (lastKnownRawMiles + 5.0)) {
                     console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${parsedMiles.toFixed(1)} mi`);
                     rawTripDistanceMiles = lastKnownRawMiles;
                 } 
+                // Torque Auto-Reset Detection: Resets trip counter back near 0
                 else if (lastKnownRawMiles > 1.0 && parsedMiles < 0.5) {
                     savedPreviousTripsMiles += Math.max(0, lastKnownRawMiles - sessionMilesBaseline);
-                    sessionMilesBaseline = 0.0;
-                    rangeDistanceBaseline = 0.0;
+                    sessionMilesBaseline = parsedMiles;
+                    rangeDistanceBaseline = parsedMiles;
                     rawTripDistanceMiles = parsedMiles;
                     lastKnownRawMiles = parsedMiles;
                     console.log(`[Torque Auto-Reset] Valid reset confirmed at ${parsedMiles.toFixed(2)} mi.`);
                 } 
+                // Normal Forward Distance Progression
                 else if (parsedMiles >= lastKnownRawMiles) {
                     rawTripDistanceMiles = parsedMiles;
                     lastKnownRawMiles = parsedMiles;
@@ -366,7 +369,6 @@ app.get('/live', async (req, res) => {
         let taxSaved = trueSessionMiles * MILEAGE_RATE;
 
         let hwyPercent = getParam('kff1297') || 0;
-        let motorTorque = getParam('kff1225') || 0;
 
         let speedPenalty = 0.0;
         if (speedMph > 53) {
@@ -375,7 +377,7 @@ app.get('/live', async (req, res) => {
         let hwyPenalty = (hwyPercent / 100) * 0.10; 
         let styleMultiplier = 1.0 + speedPenalty + hwyPenalty;
 
-        let baseWeightedMiles = (milesOnCurrentCharge * styleMultiplier) * 1.05;
+        let baseWeightedMiles = milesOnCurrentCharge * styleMultiplier;
 
         let rawAltitudeMeters = getParam('kff1010');
         
@@ -390,14 +392,9 @@ app.get('/live', async (req, res) => {
                 }
             }
             lastKnownAltitudeMeters = rawAltitudeMeters;
-
-            if (motorTorque <= 0) {
-                let regenCreditPerSecond = (speedMph / 3600) * 0.20; 
-                accumulatedTerrainAdjustmentMiles -= regenCreditPerSecond;
-            }
         }
 
-        let adjustedTripDistanceMiles = baseWeightedMiles + accumulatedTerrainAdjustmentMiles;
+        let adjustedTripDistanceMiles = baseWeightedMiles + Math.max(0, accumulatedTerrainAdjustmentMiles);
         if (isNaN(adjustedTripDistanceMiles) || adjustedTripDistanceMiles < 0) adjustedTripDistanceMiles = 0; 
 
         let rawAmbientCelsius = getParam('k46');
@@ -438,7 +435,7 @@ app.get('/live', async (req, res) => {
             actualSessionMilesRaw: trueSessionMiles,
             shiftSeconds: shiftDurationSeconds,
             rawSpeed: speedMph,
-            tax: "\$" + taxSaved.toFixed(2)
+            tax: "$" + taxSaved.toFixed(2)
         };
 
         io.emit('telemetry_update', telemetryData);
@@ -732,7 +729,7 @@ app.post('/remove-offer', async (req, res) => {
         };
 
         const emptyOfferObject = {
-            pay: "\$0.00",
+            pay: "$0.00",
             miles: "0.0",
             merchant: "[CANCELED]",
             rank: "NONE",
@@ -741,7 +738,7 @@ app.post('/remove-offer', async (req, res) => {
         };
 
         const filesToUpload = [
-            { name: 'current_offer.txt', content: '\$0.00' },
+            { name: 'current_offer.txt', content: '$0.00' },
             { name: 'offer_miles.txt', content: '0.0' },
             { name: 'merchant_name.txt', content: '[CANCELED]' },
             { name: 'offer_rank.txt', content: 'NONE' },
@@ -959,7 +956,7 @@ async function checkAndCleanScanningStatus() {
             };
 
             const emptyOfferObject = {
-                pay: "\$0.00",
+                pay: "$0.00",
                 miles: "0.0",
                 merchant: "READY",
                 rank: "NONE",
@@ -968,7 +965,7 @@ async function checkAndCleanScanningStatus() {
             };
 
             const clearFiles = [
-                { name: 'current_offer.txt', content: '\$0.00' },
+                { name: 'current_offer.txt', content: '$0.00' },
                 { name: 'offer_miles.txt', content: '0.0' },
                 { name: 'merchant_name.txt', content: 'READY' },
                 { name: 'offer_rank.txt', content: 'NONE' },
