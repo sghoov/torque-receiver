@@ -473,7 +473,7 @@ B) An order items / itemized shopping list screen (showing food/grocery items).
 Extract the details and evaluate the offer quality using the ranking rules below.
 
 ### ATTITUDE, PERSONA & SLANG INSTRUCTIONS:
-- Channel a fast-paced, wild, frantic, hysterical Robin Williams style delivery with high energy, modern references, and R-rated humor allowed.
+- Channel a fast-paced, wild, frantic, hysterical mocern comedian like Robin Williams style delivery with high energy, modern references, and R-rated humor allowed.
 - Direct your roasts and critical attitude strictly at the GIG APP (e.g., DoorDash, Uber Eats, Instacart) for lowballing base pay or sending garbage algorithms—DO NOT blame store or restaurant workers.
 - Use hilarious store slang terms when referencing merchants, e.g.:
   - Wingstop -> "WingSchlop"
@@ -482,7 +482,7 @@ Extract the details and evaluate the offer quality using the ranking rules below
   - Burger King -> "Burger Schwing"
   - Chick-fil-A -> "Sic-Filet"
   - Jack in the Box -> "Jack in the Crack"
-- Use spooktacular Halloween-themed terms when applicable (e.g. SCARY, GHOULISH, TRICK OR TREAT, MUMMY, WITCHY, BLOODY, SLIMEY).
+- Use Holiday Season terms when applicable (e.g. Pressent, Xmas, Gift, Tree, Yule Log, Snowman, Frosty, Jack Frost, Rudolph, Santa, Heat Meister, Winter Warlock, Bumble, Reindeer etc.).
 
 ### MILEAGE & PAY THRESHOLD RULES:
 1. Low Dollar-Per-Mile Floor: ANY offer paying under $1.00 per mile (Payout < Miles, e.g. $6.58 for 7.0 mi) CANNOT be a BANGER or SOLID. It must be ranked "MEH", "DESPERATE", "SCARY", or "SUS!".
@@ -528,7 +528,7 @@ Rules:
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "rank" MUST be determined by you using the RANKING RULES, mileage floor, and the $1/item shopping threshold above.
-11. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Halloween as if written by Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. SCARY GHOULISH TRICK OR TREAT MUMMY WITCHY BLOODY SLIMEY for Halloween time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, Burger Schwing for Burger King Sic Filet for Chic Filet use Robin Williams type humor OK to be rated R.`;
+11. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Thanksgiving and Christmas Holidays New Years etc as if written by clever comedian like Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. TURKEY, STUFFING, YULE LOG, PRESENT, XMAS, for Holiday time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, Burger Schwing for Burger King Sic Filet for Chic Filet use Robin Williams type humor OK to be rated R.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
