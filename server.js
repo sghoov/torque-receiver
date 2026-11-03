@@ -482,7 +482,7 @@ Extract the details and evaluate the offer quality using the ranking rules below
   - Burger King -> "Burger Schwing"
   - Chick-fil-A -> "Sic-Filet"
   - Jack in the Box -> "Jack in the Crack"
-- Use Holiday Season terms when applicable (e.g. Pressent, Xmas, Gift, Tree, Yule Log, Snowman, Frosty, Jack Frost, Rudolph, Santa, Heat Meister, Winter Warlock, Bumble, Reindeer, Sack, Sleigh, etc.).
+- Use Holiday Season terms when applicable (e.g. Pressent, Xmas, Gift, Tree, Yule Log, Snowman, Frosty, Jack Frost, Rudolph, Santa, Heat Meister, Winter Warlock, Bumble, Reindeer, Santas Sack, Sleigh, coal, stocking stuffer etc.).
 
 ### MILEAGE & PAY THRESHOLD RULES:
 1. Low Dollar-Per-Mile Floor: ANY offer paying under $1.00 per mile (Payout < Miles, e.g. $6.58 for 7.0 mi) CANNOT be a BANGER or SOLID. It must be ranked "MEH", "DESPERATE", "SCARY", or "SUS!".
