@@ -187,6 +187,17 @@ app.get('/current-city', (req, res) => {
     res.json({ lat: currentLat, lon: currentLon });
 });
 
+// Current Items API Endpoint for Widget Sync on Load
+app.get('/api/current-items', async (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    try {
+        let itemsObj = await getCurrentItemsFromDropbox();
+        res.json(itemsObj);
+    } catch (err) {
+        res.status(500).json({ error: 'Failed to fetch current items' });
+    }
+});
+
 // Helper function to perform a full shift wipe
 async function executeShiftReset() {
     let freshStats = { 
@@ -669,6 +680,9 @@ Rules:
 
             await copyDropboxLogo(theme.logoFilename);
 
+            // BROADCAST SOCKET UPDATE TO LIVE OVERLAYS
+            io.emit('items_update', itemsPayload);
+
             return res.json({
                 status: 'success',
                 type: 'OFFER_CARD',
@@ -698,6 +712,9 @@ Rules:
             };
 
             await uploadToDropbox('current_items.json', JSON.stringify(itemsPayload, null, 2));
+
+            // BROADCAST SOCKET UPDATE TO LIVE OVERLAYS
+            io.emit('items_update', itemsPayload);
 
             return res.json({
                 status: 'success',
@@ -775,6 +792,9 @@ app.post('/remove-offer', async (req, res) => {
         for (const file of filesToUpload) {
             await uploadToDropbox(file.name, file.content);
         }
+
+        // Broadcast empty items update
+        io.emit('items_update', emptyItemsObject);
 
         res.json({
             status: 'success',
@@ -948,6 +968,7 @@ app.post('/api/toteboard/reset', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     try {
         const resetStats = await executeShiftReset();
+        io.emit('items_update', { status: "DELIVERING", items: [], totalCalories: 0, estimatedPrice: 0.00 });
         console.log('[Tote Board Reset] Cleared shift earnings & offer history (Car telemetry untouched)');
         res.json({ status: 'success', data: resetStats });
     } catch (err) {
@@ -1001,6 +1022,8 @@ async function checkAndCleanScanningStatus() {
             for (const file of clearFiles) {
                 await uploadToDropbox(file.name, file.content);
             }
+
+            io.emit('items_update', emptyItemsObject);
         } else if (status !== 'scanning' && status !== 'charging') {
             lastCleanedStatus = status;
         }
