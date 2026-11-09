@@ -542,8 +542,8 @@ Rules:
 7. "is_shopping" is true if this is an Instacart or Shipt order, OR if it's a grocery/retail/store Shop & Deliver run.
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
-10. "total_calories" is the estimated total calorie count for all items combined (integer, estimate reasonably if exact numbers aren't listed).
-11. "estimated_price" is the estimated total retail price for the items combined (float).
+10. "total_calories" is the estimated total calorie count for all items combined. BE GENEROUS AND REALISTIC: calculate standard restaurant/grocery portion sizes (e.g., fast food meals average 800-1200 calories each; large grocery hauls or heavy items like meat, cheese, and prepared foods should scale up rapidly into the thousands of total calories). Never under-estimate.
+11. "estimated_price" is the estimated total retail price for the items combined as a float. Factor in realistic current grocery or restaurant menu pricing (e.g., standard restaurant entrees are $12-$20+, grocery carts scale quickly with meat, produce, and drinks).
 12. "rank" MUST be determined by you using the RANKING RULES, mileage floor, and the $1/item shopping threshold above.
 13. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Thanksgiving and Christmas Holidays New Years etc as if written by clever comedian like Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. TURKEY, STUFFING, YULE LOG, PRESENT, XMAS, for Holiday time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, Burger Schwing for Burger King Sic Filet for Chic Filet use Robin Williams type humor OK to be rated R Santas sack etc.`;
 
