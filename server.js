@@ -527,6 +527,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "total_calories": 0,
+  "total_protien": 0,
   "estimated_price": 0.00,
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
   "reason": "Short 5 word or less sentence funny/punchy explanation with attitude"
