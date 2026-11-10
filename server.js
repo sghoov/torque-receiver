@@ -136,7 +136,7 @@ async function getCurrentItemsFromDropbox() {
             : fileDownload.result.fileBinary;
         return JSON.parse(contents);
     } catch (e) {
-        return { status: "DELIVERING", items: [], totalCalories: 0, estimatedPrice: 0.00 };
+        return { status: "DELIVERING", items: [], totalCalories: 0, totalProtein: 0, estimatedPrice: 0.00 };
     }
 }
 
@@ -219,6 +219,7 @@ async function executeShiftReset() {
         status: "DELIVERING",
         items: [],
         totalCalories: 0,
+        totalProtein: 0,
         estimatedPrice: 0.00
     };
 
@@ -350,12 +351,10 @@ app.get('/live', async (req, res) => {
             let parsedMiles = incomingDistanceKm * 0.621371;
             
             if (!isNaN(parsedMiles) && parsedMiles >= 0) {
-                // Glitch Prevention: Block sudden unphysical jumps (e.g., >5 miles in a single update)
                 if (lastKnownRawMiles > 0 && parsedMiles > (lastKnownRawMiles + 5.0)) {
                     console.warn(`[Glitch Blocked] Ignored sudden jump from ${lastKnownRawMiles.toFixed(1)} to ${parsedMiles.toFixed(1)} mi`);
                     rawTripDistanceMiles = lastKnownRawMiles;
                 } 
-                // Torque Auto-Reset Detection: Resets trip counter back near 0
                 else if (lastKnownRawMiles > 1.0 && parsedMiles < 0.5) {
                     savedPreviousTripsMiles += Math.max(0, lastKnownRawMiles - sessionMilesBaseline);
                     sessionMilesBaseline = parsedMiles;
@@ -364,7 +363,6 @@ app.get('/live', async (req, res) => {
                     lastKnownRawMiles = parsedMiles;
                     console.log(`[Torque Auto-Reset] Valid reset confirmed at ${parsedMiles.toFixed(2)} mi.`);
                 } 
-                // Normal Forward Distance Progression
                 else if (parsedMiles >= lastKnownRawMiles) {
                     rawTripDistanceMiles = parsedMiles;
                     lastKnownRawMiles = parsedMiles;
@@ -461,7 +459,7 @@ app.get('/live', async (req, res) => {
 });
 
 // =========================================================================
-// AI OFFER CARD PARSER (/parse-offer) - DIRECT GEMINI RANKING & REASON
+// AI OFFER CARD PARSER (/parse-offer) - WITH TOTAL PROTEIN SUPPORT
 // =========================================================================
 app.post('/parse-offer', async (req, res) => {
     try {
@@ -474,7 +472,7 @@ app.post('/parse-offer', async (req, res) => {
             .replace(/^data:image\/\w+;base64,/, '')
             .replace(/\s+/g, '');
 
-        const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' });
+        const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
         const prompt = `Analyze this gig delivery offer card or order details screenshot from one of these platforms: 
 DoorDash, Uber Eats, Instacart, Amazon Flex, Shipt, or Roadie.
@@ -527,7 +525,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "item_count": 0,
   "items": [],
   "total_calories": 0,
-  "total_protien": 0,
+  "total_protein": 0,
   "estimated_price": 0.00,
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
   "reason": "Short 5 word or less sentence funny/punchy explanation with attitude"
@@ -544,10 +542,10 @@ Rules:
 8. "item_count" is the total number of items shown if it is a shop & deliver or grocery order.
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "total_calories" is the estimated total calorie count for all items combined. Be generous and realistic with restaurant/grocery portion sizes.
-11. "total_protein" is the estimated total protein content in grams (integer) combined for all items. Factor in meats, dairy, eggs, beans, protein bars, and prepared foods realistically (e.g., a standard fast food burger or chicken meal has 35g-60g+ protein; heavy grocery runs scale up accordingly).
+11. "total_protein" is the estimated total protein content in grams (integer) combined for all items. Factor in meats, dairy, eggs, beans, protein bars, and prepared foods realistically.
 12. "estimated_price" is the estimated total retail price for the items combined as a float.
 13. "rank" MUST be determined by you using the RANKING RULES, mileage floor, and the $1/item shopping threshold above.
-14. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Thanksgiving and Christmas Holidays New Years etc as if written by clever comedian like Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort, make sure to use terms fitting for the season e.g. TURKEY, STUFFING, YULE LOG, PRESENT, XMAS, for Holiday time, use slang terms for stores e.g. WingSchlop for WingStop, MickeySneeze for MacDonalds, Taco Smell for Taco Bell, Burger Schwing for Burger King Sic Filet for Chic Filet use Robin Williams type humor OK to be rated R Santas sack etc.`;
+14. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Thanksgiving and Christmas Holidays New Years etc as if written by clever comedian like Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
@@ -566,7 +564,6 @@ Rules:
         const milesNum = parseFloat(parsedData.miles || 0);
         const tipNum = parseFloat(parsedData.tip || 0);
 
-        // Direct AI Rank & Reason Selection
         const aiRank = (parsedData.rank || 'MEH').toUpperCase();
         const reason = parsedData.reason || `Ranked ${aiRank} by AI offer parser.`;
 
@@ -575,6 +572,7 @@ Rules:
             : [];
 
         const totalCalories = parseInt(parsedData.total_calories || 0);
+        const totalProtein = parseInt(parsedData.total_protein || 0);
         const estimatedPrice = parseFloat(parsedData.estimated_price || 0).toFixed(2);
 
         const isShoppingRun = Boolean(
@@ -620,6 +618,7 @@ Rules:
                 orderStatus,
                 items: parsedItems,
                 totalCalories,
+                totalProtein,
                 estimatedPrice: `$${estimatedPrice}`,
                 themeColor: theme.color,
                 logoFilename: theme.logoFilename
@@ -642,6 +641,7 @@ Rules:
                 orderStatus,
                 items: parsedItems,
                 totalCalories,
+                totalProtein,
                 estimatedPrice: parseFloat(estimatedPrice),
                 timestamp: new Date().toISOString()
             };
@@ -652,6 +652,7 @@ Rules:
                 status: orderStatus,
                 items: parsedItems,
                 totalCalories,
+                totalProtein,
                 estimatedPrice: parseFloat(estimatedPrice)
             };
 
@@ -688,7 +689,7 @@ Rules:
             return res.json({
                 status: 'success',
                 type: 'OFFER_CARD',
-                data: { appName, merchant: merchant || "DELIVERY OFFER", pay: `$${pay}`, miles, rank: aiRank, reason, friction, orderStatus, items: parsedItems, totalCalories, estimatedPrice: `$${estimatedPrice}`, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
+                data: { appName, merchant: merchant || "DELIVERY OFFER", pay: `$${pay}`, miles, rank: aiRank, reason, friction, orderStatus, items: parsedItems, totalCalories, totalProtein, estimatedPrice: `$${estimatedPrice}`, newGrandTotal: `$${newGrandTotal}`, newTotalMiles }
             });
         } 
         else {
@@ -702,14 +703,16 @@ Rules:
                 }
             });
 
-            // Accumulate calories and estimated price if adding items
+            // Accumulate calories, protein, and estimated price if adding items
             let cumulativeCalories = (existingItemsObj.totalCalories || 0) + totalCalories;
+            let cumulativeProtein = (existingItemsObj.totalProtein || 0) + totalProtein;
             let cumulativePrice = (parseFloat(existingItemsObj.estimatedPrice || 0) + parseFloat(estimatedPrice)).toFixed(2);
 
             const itemsPayload = {
                 status: orderStatus,
                 items: mergedItems,
                 totalCalories: cumulativeCalories,
+                totalProtein: cumulativeProtein,
                 estimatedPrice: parseFloat(cumulativePrice)
             };
 
@@ -721,7 +724,7 @@ Rules:
             return res.json({
                 status: 'success',
                 type: 'ITEMS_ONLY',
-                data: { orderStatus, items: mergedItems, totalCalories: cumulativeCalories, estimatedPrice: `$${cumulativePrice}` }
+                data: { orderStatus, items: mergedItems, totalCalories: cumulativeCalories, totalProtein: cumulativeProtein, estimatedPrice: `$${cumulativePrice}` }
             });
         }
 
@@ -767,6 +770,7 @@ app.post('/remove-offer', async (req, res) => {
             status: "DELIVERING",
             items: [],
             totalCalories: 0,
+            totalProtein: 0,
             estimatedPrice: 0.00
         };
 
@@ -795,7 +799,6 @@ app.post('/remove-offer', async (req, res) => {
             await uploadToDropbox(file.name, file.content);
         }
 
-        // Broadcast empty items update
         io.emit('items_update', emptyItemsObject);
 
         res.json({
@@ -862,7 +865,6 @@ app.post('/add-tip', async (req, res) => {
 // PAPA GIGS TOTE BOARD API ENDPOINTS
 // =========================================================================
 
-// 1. Fetch live tote board stats with CORS & per-app calculation
 app.get('/api/toteboard', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST');
@@ -911,7 +913,6 @@ app.get('/api/toteboard', async (req, res) => {
     }
 });
 
-// 2. Add manual tips/donations via iOS Shortcut or API
 app.post('/api/toteboard/add-donation', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     try {
@@ -965,12 +966,11 @@ app.post('/api/toteboard/add-donation', async (req, res) => {
     }
 });
 
-// 3. Reset Tote Board totals ONLY (Keeps Torque vehicle telemetry & trip clock intact!)
 app.post('/api/toteboard/reset', async (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     try {
         const resetStats = await executeShiftReset();
-        io.emit('items_update', { status: "DELIVERING", items: [], totalCalories: 0, estimatedPrice: 0.00 });
+        io.emit('items_update', { status: "DELIVERING", items: [], totalCalories: 0, totalProtein: 0, estimatedPrice: 0.00 });
         console.log('[Tote Board Reset] Cleared shift earnings & offer history (Car telemetry untouched)');
         res.json({ status: 'success', data: resetStats });
     } catch (err) {
@@ -1000,6 +1000,7 @@ async function checkAndCleanScanningStatus() {
                 status: "DELIVERING",
                 items: [],
                 totalCalories: 0,
+                totalProtein: 0,
                 estimatedPrice: 0.00
             };
 
@@ -1034,7 +1035,6 @@ async function checkAndCleanScanningStatus() {
     }
 }
 
-// Poll status.txt every 3 seconds to clear old offer data when scanning
 setInterval(checkAndCleanScanningStatus, 3000);
 
 // =========================================================================
