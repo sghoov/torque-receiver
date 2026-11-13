@@ -543,9 +543,9 @@ Rules:
 9. "items" is an array of strings containing ONLY the primary food menu items or grocery items with quantities.
 10. "total_calories" is the estimated total calorie count for all items combined. Be generous and realistic with restaurant/grocery portion sizes.
 11. "total_protein" is the estimated total protein content in grams (integer) combined for all items. Factor in meats, dairy, eggs, beans, protein bars, and prepared foods realistically.
-12. "estimated_price" is the estimated total retail price for the items combined as a float.
+12. "estimated_price" is the estimated total retail price for the items as sold on DoorDash or UberEats combined as a float.
 13. "rank" MUST be determined by you using the RANKING RULES, mileage floor, and the $1/item shopping threshold above.
-14. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Thanksgiving and Christmas Holidays New Years etc as if written by clever comedian like Robin Williams with modern references directly explaining why your assigned "rank" fits this payout and item effort.`;
+14. "reason" MUST be a single punchy, funny, witty 5 word max sentence themed for Thanksgiving and Christmas Holidays New Years etc as if written by clever comedian like Robin Williams, can be RATED R with modern references directly explaining why your assigned "rank" fits this payout and item effort.`;
 
         const imageParts = [{ inlineData: { data: cleanBase64, mimeType: 'image/png' } }];
         const result = await model.generateContent([prompt, ...imageParts]);
