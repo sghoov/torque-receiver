@@ -492,7 +492,7 @@ Extract the details and evaluate the offer quality using the ranking rules below
   - Taco Bell -> "Taco Smell"
   - Burger King -> "Burger Schwing"
   - Chick-fil-A -> "Sic-Filet"
-  - Jack in the Box -> "Jack in the Crack"
+  - Jack in the Box -> "Jack in the Whack"
 - Use Holiday Season terms when applicable (e.g. Present, Xmas, Gift, Tree, Yule Log, Snowman, Frosty, Jack Frost, Rudolph, Santa, Heat Meister, Winter Warlock, Bumble, Reindeer, Santas Sack, Sleigh, coal, stocking stuffer etc.).
 
 ### MILEAGE & PAY THRESHOLD RULES:
@@ -528,7 +528,7 @@ Extract the details and return ONLY a valid JSON object with no markdown formatt
   "total_protein": 0,
   "estimated_price": 0.00,
   "rank": "BANGER! | SOLID | MEH | DESPERATE | SCARY | SUS!",
-  "reason": "Short 5 word or less sentence funny/punchy explanation with attitude"
+  "reason": "Short 5 word or less sentence funny/punchy/smart explanation with attitude"
 }
 
 Rules:
